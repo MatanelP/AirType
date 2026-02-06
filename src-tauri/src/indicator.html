@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+    }
+    .container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-radius: 22px;
+      background: #18181b;
+      transition: background 0.2s ease, opacity 0.2s ease;
+      opacity: 0;
+    }
+    .container.recording { background: #dc2626; opacity: 1; }
+    .container.transcribing { background: #7c3aed; opacity: 1; }
+    .container.done { background: #16a34a; opacity: 1; }
+    .icon {
+      font-size: 14px;
+      color: white;
+    }
+    .recording .icon { animation: pulse 1s infinite; }
+    .transcribing .icon { animation: spin 1s linear infinite; display: inline-block; }
+    .label {
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="container" class="container">
+    <span id="icon" class="icon"></span>
+    <span id="label" class="label"></span>
+  </div>
+  <script>
+    const container = document.getElementById('container');
+    const icon = document.getElementById('icon');
+    const label = document.getElementById('label');
+    let currentLang = 'en';
+
+    function setState(state, lang) {
+      if (lang) currentLang = lang;
+      container.className = 'container ' + state;
+      
+      if (state === 'recording') {
+        icon.textContent = '●';
+        label.textContent = currentLang === 'he' ? 'מקליט' : 'Recording';
+      } else if (state === 'transcribing') {
+        icon.textContent = '◐';
+        label.textContent = currentLang === 'he' ? 'מעבד' : 'Processing';
+      } else if (state === 'done') {
+        icon.textContent = '✓';
+        label.textContent = currentLang === 'he' ? 'בוצע' : 'Done';
+      } else {
+        icon.textContent = '';
+        label.textContent = '';
+      }
+    }
+
+    // Expose to Tauri
+    window.setState = setState;
+    
+    // Listen for Tauri events
+    if (window.__TAURI__) {
+      window.__TAURI__.event.listen('indicator-show', (e) => {
+        setState('recording', e.payload?.language);
+      });
+      window.__TAURI__.event.listen('indicator-transcribing', () => {
+        setState('transcribing');
+      });
+      window.__TAURI__.event.listen('indicator-done', () => {
+        setState('done');
+      });
+      window.__TAURI__.event.listen('indicator-hide', () => {
+        setState('idle');
+      });
+    }
+  </script>
+</body>
+</html>

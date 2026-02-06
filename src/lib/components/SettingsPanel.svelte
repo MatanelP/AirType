@@ -1,0 +1,616 @@
+<script>
+  // @ts-nocheck
+  import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
+  import { onMount } from 'svelte';
+
+  let { 
+    isOpen = false, 
+    settings = {}, 
+    onClose = () => {}, 
+    onSettingsChange = () => {} 
+  } = $props();
+
+  let localSettings = $state({ ...settings });
+  let isSaving = $state(false);
+  let saveTimeout = $state(null);
+  let recordingHotkeyFor = $state(null);
+  let modelStatus = $state([]);
+  let downloadingModel = $state(null);
+  let downloadProgress = $state(0);
+
+  $effect(() => {
+    localSettings = { ...settings };
+  });
+
+  $effect(() => {
+    if (isOpen) {
+      loadModelStatus();
+    }
+  });
+
+  onMount(() => {
+    let unlisteners = [];
+    
+    (async () => {
+      unlisteners.push(await listen('model-download-progress', (event) => {
+        const data = event.payload;
+        downloadProgress = data.progress;
+      }));
+      
+      unlisteners.push(await listen('model-download-complete', () => {
+        downloadingModel = null;
+        downloadProgress = 0;
+        loadModelStatus();
+      }));
+    })();
+    
+    return () => unlisteners.forEach(fn => fn());
+  });
+
+  async function loadModelStatus() {
+    try {
+      modelStatus = await invoke('get_model_status');
+    } catch (e) {
+      console.error('Failed to load model status:', e);
+    }
+  }
+
+  async function downloadModel(size) {
+    downloadingModel = size;
+    downloadProgress = 0;
+    try {
+      await invoke('download_model', { size });
+    } catch (e) {
+      console.error('Failed to download model:', e);
+      downloadingModel = null;
+    }
+  }
+
+  async function saveSettings() {
+    isSaving = true;
+    try {
+      await invoke('save_settings', { settings: localSettings });
+      onSettingsChange(localSettings);
+    } catch (e) {
+      console.error('Failed to save settings:', e);
+    } finally {
+      isSaving = false;
+    }
+  }
+
+  function debouncedSave() {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => saveSettings(), 300);
+  }
+
+  async function updateSetting(key, value) {
+    console.log(`[AirType] Setting changed: ${key} = ${value}`);
+    localSettings = { ...localSettings, [key]: value };
+    
+    if (key === 'hotkey_english' || key === 'hotkey_hebrew') {
+      console.log(`[AirType] Hotkey updated: ${key} -> "${value}"`);
+    }
+    
+    if (key === 'start_on_login') {
+      try {
+        await invoke('set_autostart', { enabled: value });
+      } catch (e) {
+        console.error('Failed to set autostart:', e);
+      }
+    }
+    
+    if (key === 'model_size') {
+      const model = modelStatus.find(m => m.size === value);
+      if (model && !model.downloaded) {
+        downloadModel(value);
+      }
+    }
+    
+    debouncedSave();
+  }
+
+  let pendingModifiers = $state([]);
+  let pendingKey = $state(null);
+  let lastModifierCode = $state(null);
+
+  function startRecordingHotkey(type) {
+    recordingHotkeyFor = type;
+    pendingModifiers = [];
+    pendingKey = null;
+    lastModifierCode = null;
+  }
+
+  function handleKeydown(e) {
+    if (!recordingHotkeyFor) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    console.log(`[AirType] Keydown: key=${e.key}, code=${e.code}, altKey=${e.altKey}, ctrlKey=${e.ctrlKey}`);
+    
+    if (e.key === 'Escape') {
+      console.log('[AirType] Escape pressed, canceling hotkey recording');
+      recordingHotkeyFor = null;
+      pendingModifiers = [];
+      pendingKey = null;
+      lastModifierCode = null;
+      return;
+    }
+    
+    // Check if this is a modifier key press
+    const isModifierKey = ['AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'MetaLeft', 'MetaRight'].includes(e.code);
+    
+    if (isModifierKey) {
+      // Track which modifier was pressed (for modifier-only hotkeys)
+      console.log(`[AirType] Modifier key pressed: ${e.code}`);
+      lastModifierCode = e.code;
+      pendingModifiers = [e.code];
+    } else {
+      // Non-modifier key - build the full combination
+      const mods = [];
+      if (e.ctrlKey) mods.push('Ctrl');
+      if (e.altKey) mods.push('Alt');
+      if (e.shiftKey) mods.push('Shift');
+      if (e.metaKey) mods.push('Super');
+      pendingModifiers = mods;
+      pendingKey = e.code.replace('Key', '').replace('Digit', '');
+      
+      // Save immediately when a non-modifier key is pressed
+      const hotkey = mods.length > 0 ? [...mods, pendingKey].join('+') : pendingKey;
+      console.log(`[AirType] Key combination detected: ${hotkey}`);
+      updateSetting(recordingHotkeyFor, hotkey);
+      recordingHotkeyFor = null;
+      pendingModifiers = [];
+      pendingKey = null;
+      lastModifierCode = null;
+    }
+  }
+
+  function handleKeyup(e) {
+    if (!recordingHotkeyFor) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    console.log(`[AirType] Keyup: key=${e.key}, code=${e.code}, lastModifierCode=${lastModifierCode}`);
+    
+    // Check if this is the release of a modifier-only keypress
+    const isModifierRelease = ['AltLeft', 'AltRight', 'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'MetaLeft', 'MetaRight'].includes(e.code);
+    
+    if (isModifierRelease && lastModifierCode === e.code) {
+      // Single modifier key was pressed and released - save it
+      console.log(`[AirType] Modifier-only hotkey detected: ${e.code}`);
+      updateSetting(recordingHotkeyFor, e.code);
+      recordingHotkeyFor = null;
+      pendingModifiers = [];
+      pendingKey = null;
+      lastModifierCode = null;
+    }
+  }
+
+  function handleBackdropClick(e) {
+    if (e.target === e.currentTarget) onClose();
+  }
+</script>
+
+<svelte:window onkeydown={handleKeydown} onkeyup={handleKeyup} />
+
+{#if isOpen}
+  <div class="settings-backdrop" onclick={handleBackdropClick} role="presentation">
+    <div class="settings-panel" role="dialog" aria-label="Settings">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        {#if isSaving}
+          <span class="saving-indicator">Saved</span>
+        {/if}
+        <button class="close-btn" onclick={onClose} aria-label="Close settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      
+      <div class="settings-content">
+        <section class="settings-section">
+          <h3>Hotkeys</h3>
+          <p class="section-note">Press a key combination or single modifier key</p>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">English</span>
+              <span class="setting-desc">Trigger recording in English</span>
+            </div>
+            {#if recordingHotkeyFor === 'hotkey_english'}
+              <button class="hotkey-btn recording" onclick={() => { recordingHotkeyFor = null; pendingModifiers = []; pendingKey = null; }}>
+                {pendingModifiers.length > 0 || pendingKey ? [...pendingModifiers, pendingKey].filter(Boolean).join('+') : 'Press keys...'}
+              </button>
+            {:else}
+              <button class="hotkey-btn" onclick={() => startRecordingHotkey('hotkey_english')}>
+                {localSettings.hotkey_english || 'Not set'}
+              </button>
+            {/if}
+          </div>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Hebrew</span>
+              <span class="setting-desc">Trigger recording in Hebrew</span>
+            </div>
+            {#if recordingHotkeyFor === 'hotkey_hebrew'}
+              <button class="hotkey-btn recording" onclick={() => { recordingHotkeyFor = null; pendingModifiers = []; pendingKey = null; }}>
+                {pendingModifiers.length > 0 || pendingKey ? [...pendingModifiers, pendingKey].filter(Boolean).join('+') : 'Press keys...'}
+              </button>
+            {:else}
+              <button class="hotkey-btn" onclick={() => startRecordingHotkey('hotkey_hebrew')}>
+                {localSettings.hotkey_hebrew || 'Not set'}
+              </button>
+            {/if}
+          </div>
+        </section>
+        
+        <section class="settings-section">
+          <h3>Recording</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Mode</span>
+              <span class="setting-desc">Hold: release to stop. Toggle: press again to stop</span>
+            </div>
+            <select 
+              class="select-input"
+              value={localSettings.hotkey_mode || 'hold'}
+              onchange={(e) => updateSetting('hotkey_mode', e.target.value)}
+            >
+              <option value="hold">Hold to record</option>
+              <option value="toggle">Toggle recording</option>
+            </select>
+          </div>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Live transcription</span>
+              <span class="setting-desc">Show text as you speak (experimental)</span>
+            </div>
+            <label class="toggle">
+              <input 
+                type="checkbox" 
+                checked={localSettings.live_transcription || false}
+                onchange={(e) => updateSetting('live_transcription', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </section>
+        
+        <section class="settings-section">
+          <h3>Model</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Whisper model</span>
+              <span class="setting-desc">Larger = more accurate but slower</span>
+            </div>
+            <select 
+              class="select-input"
+              value={localSettings.model_size || 'base'}
+              onchange={(e) => updateSetting('model_size', e.target.value)}
+            >
+              {#each modelStatus as model}
+                <option value={model.size}>
+                  {model.size} ({model.size_mb}MB) {model.downloaded ? '✓' : ''}
+                </option>
+              {/each}
+              {#if modelStatus.length === 0}
+                <option value="tiny">tiny (75MB)</option>
+                <option value="base">base (150MB)</option>
+                <option value="small">small (500MB)</option>
+                <option value="medium">medium (1.5GB)</option>
+                <option value="large">large (3GB)</option>
+              {/if}
+            </select>
+          </div>
+          
+          {#if downloadingModel}
+            <div class="download-progress">
+              <span>Downloading {downloadingModel}...</span>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: {downloadProgress}%"></div>
+              </div>
+              <span class="progress-text">{downloadProgress.toFixed(0)}%</span>
+            </div>
+          {/if}
+        </section>
+        
+        <section class="settings-section">
+          <h3>System</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Start minimized</span>
+              <span class="setting-desc">Hide window on launch, show in tray</span>
+            </div>
+            <label class="toggle">
+              <input 
+                type="checkbox" 
+                checked={localSettings.start_minimized || false}
+                onchange={(e) => updateSetting('start_minimized', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Launch on login</span>
+              <span class="setting-desc">Start AirType when you log in</span>
+            </div>
+            <label class="toggle">
+              <input 
+                type="checkbox" 
+                checked={localSettings.start_on_login || false}
+                onchange={(e) => updateSetting('start_on_login', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .settings-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(12px);
+    z-index: 100;
+  }
+  
+  .settings-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(400px, 90vw);
+    background: var(--color-surface, #0d0d12);
+    border-left: 1px solid var(--color-border, #1a1a25);
+    display: flex;
+    flex-direction: column;
+    animation: slideIn 0.2s ease-out;
+  }
+  
+  @keyframes slideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+  
+  .settings-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--color-border, #1a1a25);
+  }
+  
+  .settings-header h2 {
+    margin: 0;
+    flex: 1;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text, #f0f0f5);
+  }
+  
+  .saving-indicator {
+    font-size: 0.75rem;
+    color: var(--color-success, #10b981);
+    font-weight: 500;
+  }
+  
+  .close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted, #8888a0);
+    cursor: pointer;
+    border-radius: var(--radius-md, 8px);
+    transition: all 0.15s;
+  }
+  
+  .close-btn:hover {
+    background: var(--color-surface-hover, #1a1a25);
+    color: var(--color-text, #f0f0f5);
+  }
+  
+  .settings-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1.5rem;
+  }
+  
+  .settings-section {
+    margin-bottom: 1.75rem;
+  }
+  
+  .settings-section h3 {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted, #8888a0);
+    margin: 0 0 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  
+  .section-note {
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #8888a0);
+    margin: 0 0 0.75rem;
+    font-style: italic;
+  }
+  
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--color-border, #1a1a25);
+  }
+  
+  .setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  
+  .setting-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-text, #f0f0f5);
+  }
+  
+  .setting-desc {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted, #8888a0);
+  }
+  
+  .hotkey-btn {
+    padding: 0.5rem 1rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-text, #f0f0f5);
+    font-size: 0.8125rem;
+    font-family: monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+    min-width: 100px;
+    text-align: center;
+  }
+  
+  .hotkey-btn:hover {
+    background: var(--color-surface-hover, #252530);
+    border-color: var(--color-primary, #6366f1);
+  }
+  
+  .hotkey-btn.recording {
+    background: var(--color-primary, #6366f1);
+    border-color: var(--color-primary, #6366f1);
+    animation: pulse 1s infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  .select-input {
+    padding: 0.5rem 2rem 0.5rem 0.75rem;
+    background-color: #1a1a25;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a0' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    border: 1px solid #2a2a35;
+    border-radius: 8px;
+    color: #f0f0f5;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    min-width: 150px;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+  }
+  
+  .select-input:focus {
+    outline: none;
+    border-color: #6366f1;
+  }
+  
+  .select-input option {
+    background: #1a1a25;
+    color: #f0f0f5;
+    padding: 0.5rem;
+  }
+  
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+  }
+  
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  
+  .toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    transition: 0.2s;
+    border-radius: 24px;
+  }
+  
+  .toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--color-text-muted, #8888a0);
+    transition: 0.2s;
+    border-radius: 50%;
+  }
+  
+  .toggle input:checked + .toggle-slider {
+    background-color: var(--color-primary, #6366f1);
+    border-color: var(--color-primary, #6366f1);
+  }
+  
+  .toggle input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+    background-color: white;
+  }
+  
+  .download-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border-radius: var(--radius-md, 8px);
+    margin-top: 0.5rem;
+  }
+  
+  .progress-bar {
+    height: 6px;
+    background: var(--color-border, #2a2a35);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: var(--color-primary, #6366f1);
+    transition: width 0.3s ease;
+  }
+  
+  .progress-text {
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #8888a0);
+    text-align: right;
+  }
+</style>
