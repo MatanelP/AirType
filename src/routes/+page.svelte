@@ -219,24 +219,6 @@
     </section>
   {/if}
   
-  <!-- Floating Indicator (shown during recording/transcribing) -->
-  {#if indicatorState !== 'idle'}
-    <div class="floating-indicator" class:recording={indicatorState === 'recording'} class:transcribing={indicatorState === 'transcribing'} class:done={indicatorState === 'done'}>
-      <span class="indicator-icon">
-        {#if indicatorState === 'recording'}●{:else if indicatorState === 'transcribing'}◐{:else}✓{/if}
-      </span>
-      <span class="indicator-text">
-        {#if indicatorState === 'recording'}
-          {recordingLanguage === 'he' ? 'מקליט' : 'Recording'}
-        {:else if indicatorState === 'transcribing'}
-          {recordingLanguage === 'he' ? 'מתמלל' : 'Processing'}
-        {:else}
-          {recordingLanguage === 'he' ? 'בוצע' : 'Done'}
-        {/if}
-      </span>
-    </div>
-  {/if}
-  
   <!-- Error Toast -->
   {#if error}
     <div class="error-toast animate-slideUp">
@@ -459,70 +441,5 @@
   
   .dismiss-btn:hover {
     opacity: 1;
-  }
-  
-  /* Floating Indicator */
-  .floating-indicator {
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 0.625rem 1.25rem;
-    border-radius: 2rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: white;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1) inset;
-    z-index: 100;
-    animation: slideUp 0.2s ease-out;
-  }
-  
-  .floating-indicator.recording {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  }
-  
-  .floating-indicator.transcribing {
-    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-  }
-  
-  .floating-indicator.done {
-    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-  }
-  
-  .indicator-icon {
-    font-size: 1rem;
-  }
-  
-  .floating-indicator.recording .indicator-icon {
-    animation: pulse 1s infinite;
-  }
-  
-  .floating-indicator.transcribing .indicator-icon {
-    animation: spin 1s linear infinite;
-    display: inline-block;
-  }
-  
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-  
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  
-  @keyframes slideUp {
-    from { 
-      transform: translateX(-50%) translateY(20px);
-      opacity: 0;
-    }
-    to { 
-      transform: translateX(-50%) translateY(0);
-      opacity: 1;
-    }
   }
 </style>

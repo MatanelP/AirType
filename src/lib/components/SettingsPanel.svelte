@@ -11,7 +11,7 @@
     onSettingsChange = () => {} 
   } = $props();
 
-  let localSettings = $state({ ...settings });
+  let localSettings = $state({});
   let isSaving = $state(false);
   let saveTimeout = $state(null);
   let recordingHotkeyFor = $state(null);
@@ -19,6 +19,7 @@
   let downloadingModel = $state(null);
   let downloadProgress = $state(0);
 
+  // Sync localSettings when settings prop changes
   $effect(() => {
     localSettings = { ...settings };
   });
