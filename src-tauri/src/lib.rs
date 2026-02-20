@@ -94,16 +94,8 @@ impl AppState {
     }
 
     /// Get the model path for a specific language
-    /// For Hebrew, use the ivrit-ai optimized model if available
-    pub fn get_model_path_for_language(&self, language: &str) -> Option<PathBuf> {
-        if language == "he" {
-            // Check if Hebrew-optimized model exists
-            let hebrew_path = models::hebrew_model_path();
-            if hebrew_path.exists() {
-                return Some(hebrew_path);
-            }
-        }
-        // Fall back to default model
+    /// Uses the same selected model for all languages
+    pub fn get_model_path_for_language(&self, _language: &str) -> Option<PathBuf> {
         self.get_model_path()
     }
 
@@ -490,44 +482,6 @@ async fn download_model(app: AppHandle, size: String) -> Result<String, String> 
     Ok(path.to_string_lossy().to_string())
 }
 
-/// Download the Hebrew-optimized model (ivrit-ai)
-#[tauri::command]
-async fn download_hebrew_model(app: AppHandle) -> Result<String, String> {
-    // Check if already downloaded
-    if models::hebrew_model_exists() {
-        return Ok(models::hebrew_model_path().to_string_lossy().to_string());
-    }
-    
-    let app_handle = app.clone();
-    let path = models::download_hebrew_model(Some(move |downloaded, total| {
-        let progress = if total > 0 {
-            (downloaded as f64 / total as f64 * 100.0) as u32
-        } else {
-            0
-        };
-        let _ = app_handle.emit("model-download-progress", serde_json::json!({
-            "size": "hebrew",
-            "downloaded": downloaded,
-            "total": total,
-            "progress": progress
-        }));
-    }))
-    .await?;
-    
-    let _ = app.emit("model-download-complete", "hebrew");
-    Ok(path.to_string_lossy().to_string())
-}
-
-/// Check if Hebrew model is available
-#[tauri::command]
-fn get_hebrew_model_status() -> serde_json::Value {
-    serde_json::json!({
-        "downloaded": models::hebrew_model_exists(),
-        "path": models::hebrew_model_path().to_string_lossy().to_string(),
-        "size_mb": models::hebrew_model_size_mb()
-    })
-}
-
 // ============================================================================
 // Indicator Window Helpers - Run on main thread to avoid X11 crashes
 // ============================================================================
@@ -679,8 +633,6 @@ pub fn run() {
             set_autostart,
             get_model_status,
             download_model,
-            download_hebrew_model,
-            get_hebrew_model_status,
             validate_openai_key,
         ])
         .setup(move |app| {

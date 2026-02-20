@@ -16,7 +16,6 @@
   let saveTimeout = $state(null);
   let recordingHotkeyFor = $state(null);
   let modelStatus = $state([]);
-  let hebrewModelStatus = $state({ downloaded: false, size_mb: 600 });
   let downloadingModel = $state(null);
   let downloadProgress = $state(0);
   let showApiKey = $state(false);
@@ -30,7 +29,6 @@
   $effect(() => {
     if (isOpen) {
       loadModelStatus();
-      loadHebrewModelStatus();
     }
   });
 
@@ -68,26 +66,6 @@
       await invoke('download_model', { size });
     } catch (e) {
       console.error('Failed to download model:', e);
-      downloadingModel = null;
-    }
-  }
-
-  async function loadHebrewModelStatus() {
-    try {
-      hebrewModelStatus = await invoke('get_hebrew_model_status');
-    } catch (e) {
-      console.error('Failed to load Hebrew model status:', e);
-    }
-  }
-
-  async function downloadHebrewModel() {
-    downloadingModel = 'hebrew';
-    downloadProgress = 0;
-    try {
-      await invoke('download_hebrew_model');
-      await loadHebrewModelStatus();
-    } catch (e) {
-      console.error('Failed to download Hebrew model:', e);
       downloadingModel = null;
     }
   }
@@ -372,8 +350,8 @@
           
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">English model</span>
-              <span class="setting-desc">Used when recording in English. Larger = more accurate but slower.</span>
+              <span class="setting-label">Whisper model</span>
+              <span class="setting-desc">Used for both English and Hebrew. Use <strong>small</strong> or larger for good Hebrew accuracy.</span>
             </div>
             <select 
               class="select-input"
@@ -405,25 +383,11 @@
             </div>
           {/if}
           
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">Hebrew model</span>
-              <span class="setting-desc">
-                {#if hebrewModelStatus.downloaded}
-                  ivrit-ai turbo — used automatically when recording in Hebrew.
-                {:else}
-                  ivrit-ai turbo (~1.6GB). Much better Hebrew accuracy. Falls back to English model if not installed.
-                {/if}
-              </span>
-            </div>
-            {#if hebrewModelStatus.downloaded}
-              <span class="badge badge-success">✓ Installed</span>
-            {:else}
-              <button class="download-btn" onclick={downloadHebrewModel} disabled={downloadingModel === 'hebrew'}>
-                {downloadingModel === 'hebrew' ? 'Downloading...' : 'Download'}
-              </button>
-            {/if}
-          </div>
+          <p class="section-note">
+            <strong>tiny/base</strong>: Fast, good for English.
+            <strong>small</strong>: Best balance — recommended for Hebrew.
+            <strong>medium/large</strong>: Most accurate but slow on CPU.
+          </p>
         </section>
         {/if}
         
