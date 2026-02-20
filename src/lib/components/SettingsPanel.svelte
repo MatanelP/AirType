@@ -420,7 +420,7 @@
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Hebrew model (ivrit-ai)</span>
-              <span class="setting-desc">Optimized for Hebrew (~{hebrewModelStatus.size_mb}MB). 29% better accuracy.</span>
+              <span class="setting-desc">Optimized for Hebrew, turbo (~1.6GB). Much better accuracy.</span>
             </div>
             {#if hebrewModelStatus.downloaded}
               <span class="badge badge-success">✓ Installed</span>

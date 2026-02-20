@@ -10,9 +10,9 @@ use tokio::io::AsyncWriteExt;
 /// Base URL for Whisper model downloads
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
-/// Hebrew-optimized model URL (ivrit-ai)
-const HEBREW_MODEL_URL: &str = "https://huggingface.co/ivrit-ai/whisper-large-v3-ggml/resolve/main/ggml-model-q5_0.bin";
-const HEBREW_MODEL_FILENAME: &str = "ggml-ivrit-large-v3-q5.bin";
+/// Hebrew-optimized model URL (ivrit-ai turbo — faster, ~1.6GB)
+const HEBREW_MODEL_URL: &str = "https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ggml/resolve/main/ggml-model.bin";
+const HEBREW_MODEL_FILENAME: &str = "ggml-ivrit-large-v3-turbo.bin";
 
 /// Get the filename for a model size
 pub fn model_filename(size: ModelSize) -> &'static str {
@@ -63,7 +63,7 @@ pub fn model_size_mb(size: ModelSize) -> u64 {
 
 /// Get Hebrew model size in MB
 pub fn hebrew_model_size_mb() -> u64 {
-    600 // ~600MB for q5_0 quantized version
+    1625 // ~1.6GB for turbo GGML version
 }
 
 /// Download a model with progress reporting
