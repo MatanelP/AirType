@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 use super::buffer::{AudioBuffer, TARGET_SAMPLE_RATE};
 
@@ -64,6 +65,8 @@ pub struct AudioCapture {
     is_recording: Arc<AtomicBool>,
     device_sample_rate: u32,
     device_channels: u16,
+    /// Optional sender for streaming audio chunks to an external consumer (e.g. OpenAI)
+    stream_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>>,
 }
 
 // Stream is not Send/Sync but we manage it safely with mutex
@@ -105,6 +108,7 @@ impl AudioCapture {
             is_recording: Arc::new(AtomicBool::new(false)),
             device_sample_rate,
             device_channels,
+            stream_tx: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -127,6 +131,7 @@ impl AudioCapture {
         let is_recording = self.is_recording.clone();
         let source_rate = self.device_sample_rate;
         let channels = self.device_channels as usize;
+        let stream_tx = self.stream_tx.clone();
 
         // Create resampler state for linear interpolation
         let resample_ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
@@ -159,6 +164,11 @@ impl AudioCapture {
                     };
 
                     buffer.push_samples(&resampled);
+
+                    // Stream to external consumer if set
+                    if let Some(tx) = stream_tx.lock().as_ref() {
+                        let _ = tx.try_send(resampled);
+                    }
                 },
                 move |err| {
                     log::error!("Audio stream error: {}", err);
@@ -197,6 +207,12 @@ impl AudioCapture {
         );
 
         Ok(samples)
+    }
+
+    /// Set an external streaming sender for live audio forwarding.
+    /// Audio chunks (16kHz mono f32) will be sent through this channel during recording.
+    pub fn set_stream_sender(&self, tx: mpsc::Sender<Vec<f32>>) {
+        *self.stream_tx.lock() = Some(tx);
     }
 
     /// Get current samples without stopping recording (for live preview)

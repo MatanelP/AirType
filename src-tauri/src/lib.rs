@@ -186,6 +186,7 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
             // Start audio capture and stream to OpenAI
             let capture = AudioCapture::new()
                 .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+            capture.set_stream_sender(audio_tx.clone());
             capture.start_recording()
                 .map_err(|e| format!("Failed to start recording: {}", e))?;
 

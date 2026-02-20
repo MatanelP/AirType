@@ -221,10 +221,39 @@ impl OpenAIRealtimeTranscriber {
         });
 
         // ── Writer task: send audio chunks as base64 pcm16 ──
+        // Audio arrives at 16kHz from capture, upsample to 24kHz for OpenAI
         tokio::spawn(async move {
+            let resample_ratio = 24000.0_f64 / 16000.0_f64; // 1.5x
+            let mut resample_pos: f64 = 0.0;
+            let mut last_sample: f32 = 0.0;
+
             while let Some(samples) = audio_rx.recv().await {
-                // Convert f32 → i16 PCM (24 kHz expected by API; caller must resample if needed)
-                let pcm16: Vec<u8> = samples
+                // Resample 16kHz → 24kHz via linear interpolation
+                let mut resampled = Vec::with_capacity((samples.len() as f64 * resample_ratio).ceil() as usize + 1);
+                let extended: Vec<f32> = std::iter::once(last_sample)
+                    .chain(samples.iter().copied())
+                    .collect();
+
+                while resample_pos < samples.len() as f64 {
+                    let idx = resample_pos as usize;
+                    let frac = resample_pos - idx as f64;
+                    let sample = if idx + 1 < extended.len() {
+                        let s0 = extended[idx];
+                        let s1 = extended[idx + 1];
+                        s0 + (s1 - s0) * frac as f32
+                    } else {
+                        extended[extended.len() - 1]
+                    };
+                    resampled.push(sample);
+                    resample_pos += 1.0 / resample_ratio;
+                }
+                resample_pos -= samples.len() as f64;
+                if let Some(&s) = samples.last() {
+                    last_sample = s;
+                }
+
+                // Convert f32 → i16 PCM
+                let pcm16: Vec<u8> = resampled
                     .iter()
                     .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
                     .flat_map(|s| s.to_le_bytes())
