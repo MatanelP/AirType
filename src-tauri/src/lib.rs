@@ -26,8 +26,8 @@ use hotkeys::{
     KeyboardListener, ModifierKey,
 };
 use injection::TextInjector;
-use settings::{ModelSize, RecordingMode, Settings, SettingsStore};
-use transcription::WhisperTranscriber;
+use settings::{ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
+use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber};
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
@@ -35,6 +35,10 @@ pub struct AppState {
     pub audio: RwLock<Option<AudioCapture>>,
     /// Whisper transcriber (lazy loaded)
     pub transcriber: RwLock<Option<Arc<WhisperTranscriber>>>,
+    /// OpenAI Realtime session audio sender (when using OpenAI engine)
+    pub openai_audio_tx: RwLock<Option<tokio::sync::mpsc::Sender<Vec<f32>>>>,
+    /// Current recording language
+    pub recording_language: RwLock<String>,
     /// Hotkey manager
     pub hotkey_manager: Arc<HotkeyManager>,
     /// Low-level keyboard listener for modifier-only hotkeys
@@ -56,6 +60,8 @@ impl AppState {
         Self {
             audio: RwLock::new(None),
             transcriber: RwLock::new(None),
+            openai_audio_tx: RwLock::new(None),
+            recording_language: RwLock::new("en".to_string()),
             hotkey_manager,
             keyboard_listener,
             settings_store: RwLock::new(settings_store),
@@ -152,26 +158,69 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
         return Err("Already recording".to_string());
     }
 
-    // Ensure we have a transcriber ready
-    state.ensure_transcriber()?;
+    let settings = state.get_settings();
+    let language = state.recording_language.read().clone();
 
-    // Create audio capture
-    let capture =
-        AudioCapture::new().map_err(|e| format!("Failed to initialize audio: {}", e))?;
+    match settings.transcription_engine {
+        TranscriptionEngine::OpenAI => {
+            // OpenAI Realtime API path
+            let api_key = settings.openai_api_key
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| "OpenAI API key not set. Go to Settings → Transcription Engine.".to_string())?;
 
-    // Start recording
-    capture
-        .start_recording()
-        .map_err(|e| format!("Failed to start recording: {}", e))?;
+            let transcriber = OpenAIRealtimeTranscriber::new(&api_key);
+            transcriber.set_language(&language);
 
-    // Store the capture instance
-    *state.audio.write() = Some(capture);
-    *state.is_recording.write() = true;
+            let app_for_callback = app.clone();
+            let callback = Arc::new(move |text: &str, is_final: bool| {
+                if is_final && !text.is_empty() {
+                    log::info!("OpenAI transcription (final): {}", text);
+                    let _ = app_for_callback.emit("transcription-complete", text);
+                    // Inject text at cursor
+                    let text_owned = text.to_string();
+                    let _ = std::thread::spawn(move || {
+                        if let Ok(mut injector) = TextInjector::new() {
+                            let _ = injector.inject_text_with_delay(&text_owned, 10);
+                        }
+                    });
+                } else if !text.is_empty() {
+                    log::debug!("OpenAI transcription (delta): {}", text);
+                    let _ = app_for_callback.emit("transcription-delta", text);
+                }
+            });
 
-    // Emit event to frontend
-    let _ = app.emit("recording-started", ());
+            let audio_tx = transcriber.start_session(callback).await?;
 
-    log::info!("Recording started");
+            // Start audio capture and stream to OpenAI
+            let capture = AudioCapture::new()
+                .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+            capture.start_recording()
+                .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+            *state.openai_audio_tx.write() = Some(audio_tx);
+            *state.audio.write() = Some(capture);
+            *state.is_recording.write() = true;
+
+            let _ = app.emit("recording-started", ());
+            log::info!("Recording started (OpenAI Realtime)");
+        }
+        TranscriptionEngine::LocalWhisper => {
+            // Local Whisper path (existing behavior)
+            state.ensure_transcriber()?;
+
+            let capture = AudioCapture::new()
+                .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+            capture.start_recording()
+                .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+            *state.audio.write() = Some(capture);
+            *state.is_recording.write() = true;
+
+            let _ = app.emit("recording-started", ());
+            log::info!("Recording started (Local Whisper)");
+        }
+    }
+
     Ok(())
 }
 
@@ -185,7 +234,9 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
         return Err("Not recording".to_string());
     }
 
-    // Get audio samples
+    let settings = state.get_settings();
+
+    // Get audio samples and stop capture
     let samples = {
         let mut audio_guard = state.audio.write();
         let capture = audio_guard
@@ -198,72 +249,78 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     };
 
     *state.is_recording.write() = false;
-
-    // Emit event
     let _ = app.emit("recording-stopped", ());
 
-    if samples.is_empty() {
-        log::warn!("No audio samples captured");
-        return Ok(String::new());
-    }
-
-    log::info!("Captured {} audio samples", samples.len());
-
-    // Transcribe - update indicator to show transcribing state
-    let _ = app.emit("transcribing", ());
-    indicator_transcribing(&app);
-
-    let transcription = {
-        let transcriber_guard = state.transcriber.read();
-        let transcriber = transcriber_guard
-            .as_ref()
-            .ok_or_else(|| "Transcriber not initialized".to_string())?;
-
-        transcriber
-            .transcribe(&samples)
-            .map_err(|e| format!("Transcription failed: {}", e))?
-    };
-
-    log::info!("Transcription: {}", transcription);
-
-    // Store last transcription
-    *state.last_transcription.write() = transcription.clone();
-
-    // Emit completion event
-    let _ = app.emit("transcription-complete", &transcription);
-
-    // Inject text at cursor if not empty
-    if !transcription.is_empty() {
-        log::info!("Injecting text: {}", transcription);
-        let settings = state.get_settings();
-
-        // Create injector and inject text
-        let inject_result = tokio::task::spawn_blocking(move || {
-            log::info!("Creating text injector...");
-            let mut injector =
-                TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
-
-            log::info!("Injecting with delay: {}ms", settings.inject_delay_ms);
-            if settings.inject_delay_ms > 0 {
-                injector.inject_text_with_delay(&transcription, settings.inject_delay_ms)
-            } else {
-                injector.inject_text(&transcription)
-            }
-            .map_err(|e| format!("Failed to inject text: {}", e))
-        })
-        .await
-        .map_err(|e| format!("Injection task failed: {}", e))?;
-
-        match &inject_result {
-            Ok(_) => log::info!("Text injected successfully"),
-            Err(e) => log::error!("Text injection failed: {}", e),
+    match settings.transcription_engine {
+        TranscriptionEngine::OpenAI => {
+            // Close the OpenAI audio sender (triggers commit + close)
+            state.openai_audio_tx.write().take();
+            // Text injection is handled by the callback in start_recording
+            log::info!("Recording stopped (OpenAI). Transcription handled via WebSocket callback.");
+            Ok(String::new())
         }
-        inject_result?;
+        TranscriptionEngine::LocalWhisper => {
+            if samples.is_empty() {
+                log::warn!("No audio samples captured");
+                return Ok(String::new());
+            }
 
-        let _ = app.emit("text-injected", ());
+            log::info!("Captured {} audio samples", samples.len());
+
+            // Transcribe - update indicator to show transcribing state
+            let _ = app.emit("transcribing", ());
+            indicator_transcribing(&app);
+
+            let transcription = {
+                let transcriber_guard = state.transcriber.read();
+                let transcriber = transcriber_guard
+                    .as_ref()
+                    .ok_or_else(|| "Transcriber not initialized".to_string())?;
+
+                transcriber
+                    .transcribe(&samples)
+                    .map_err(|e| format!("Transcription failed: {}", e))?
+            };
+
+            log::info!("Transcription: {}", transcription);
+
+            // Store last transcription
+            *state.last_transcription.write() = transcription.clone();
+
+            // Emit completion event
+            let _ = app.emit("transcription-complete", &transcription);
+
+            // Inject text at cursor if not empty
+            if !transcription.is_empty() {
+                log::info!("Injecting text: {}", transcription);
+
+                let inject_delay = settings.inject_delay_ms;
+                let inject_result = tokio::task::spawn_blocking(move || {
+                    let mut injector =
+                        TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
+
+                    if inject_delay > 0 {
+                        injector.inject_text_with_delay(&transcription, inject_delay)
+                    } else {
+                        injector.inject_text(&transcription)
+                    }
+                    .map_err(|e| format!("Failed to inject text: {}", e))
+                })
+                .await
+                .map_err(|e| format!("Injection task failed: {}", e))?;
+
+                match &inject_result {
+                    Ok(_) => log::info!("Text injected successfully"),
+                    Err(e) => log::error!("Text injection failed: {}", e),
+                }
+                inject_result?;
+
+                let _ = app.emit("text-injected", ());
+            }
+
+            Ok(state.last_transcription.read().clone())
+        }
     }
-
-    Ok(state.last_transcription.read().clone())
 }
 
 /// Get current settings
@@ -277,6 +334,24 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let store = state.settings_store.read();
     store.update(settings).map_err(|e| e.to_string())
+}
+
+/// Validate OpenAI API key by making a lightweight request
+#[tauri::command]
+async fn validate_openai_key(api_key: String) -> Result<bool, String> {
+    if api_key.is_empty() {
+        return Ok(false);
+    }
+    
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.openai.com/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+    
+    Ok(resp.status().is_success())
 }
 
 /// Set recording mode
@@ -606,6 +681,7 @@ pub fn run() {
             download_model,
             download_hebrew_model,
             get_hebrew_model_status,
+            validate_openai_key,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");
@@ -714,13 +790,19 @@ pub fn run() {
                                     // Show indicator window
                                     show_indicator(&app, &language);
                                     
-                                    // Load the correct transcriber for the language
-                                    // For Hebrew, this will use the ivrit-ai model if available
-                                    if let Err(e) = state.ensure_transcriber_for_language(&language) {
-                                        log::error!("Failed to load transcriber: {}", e);
-                                        let _ = app.emit("error", e);
-                                        hide_indicator(&app);
-                                        return;
+                                    // Store current recording language
+                                    *state.recording_language.write() = language.clone();
+                                    
+                                    let settings = state.get_settings();
+                                    
+                                    // For local whisper, load the correct model for the language
+                                    if settings.transcription_engine == TranscriptionEngine::LocalWhisper {
+                                        if let Err(e) = state.ensure_transcriber_for_language(&language) {
+                                            log::error!("Failed to load transcriber: {}", e);
+                                            let _ = app.emit("error", e);
+                                            hide_indicator(&app);
+                                            return;
+                                        }
                                     }
                                     
                                     let _ = app.emit("language-changed", &language);

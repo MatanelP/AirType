@@ -20,6 +20,7 @@
   let downloadingModel = $state(null);
   let downloadProgress = $state(0);
   let showApiKey = $state(false);
+  let keyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
 
   // Sync localSettings when settings prop changes
   $effect(() => {
@@ -89,6 +90,27 @@
       console.error('Failed to download Hebrew model:', e);
       downloadingModel = null;
     }
+  }
+
+  let keyValidateTimeout = null;
+  async function validateApiKey(key) {
+    if (!key || key.length < 10) {
+      keyValidation = null;
+      return;
+    }
+    keyValidation = 'checking';
+    try {
+      const valid = await invoke('validate_openai_key', { apiKey: key });
+      keyValidation = valid ? 'valid' : 'invalid';
+    } catch (e) {
+      keyValidation = 'invalid';
+    }
+  }
+
+  function handleApiKeyChange(value) {
+    updateSetting('openai_api_key', value);
+    if (keyValidateTimeout) clearTimeout(keyValidateTimeout);
+    keyValidateTimeout = setTimeout(() => validateApiKey(value), 800);
   }
 
   async function saveSettings() {
@@ -301,16 +323,25 @@
                 <input 
                   type={showApiKey ? 'text' : 'password'}
                   class="text-input"
+                  class:input-valid={keyValidation === 'valid'}
+                  class:input-invalid={keyValidation === 'invalid'}
                   placeholder="sk-..."
                   value={localSettings.openai_api_key || ''}
-                  oninput={(e) => updateSetting('openai_api_key', e.target.value)}
+                  oninput={(e) => handleApiKeyChange(e.target.value)}
                 />
                 <button class="icon-btn" onclick={() => showApiKey = !showApiKey} aria-label="Toggle visibility">
                   {showApiKey ? '🙈' : '👁'}
                 </button>
               </div>
             </div>
-            <p class="section-note">Uses gpt-4o-transcribe for real-time streaming. Live mode is automatic.</p>
+            {#if keyValidation === 'checking'}
+              <p class="key-status checking">⏳ Validating key...</p>
+            {:else if keyValidation === 'valid'}
+              <p class="key-status valid">✓ API key is valid</p>
+            {:else if keyValidation === 'invalid'}
+              <p class="key-status invalid">✗ Invalid API key</p>
+            {/if}
+            <p class="section-note">Uses gpt-4o-transcribe for real-time streaming. Your key is stored locally with restricted file permissions and never sent anywhere except OpenAI.</p>
           {/if}
         </section>
         
@@ -714,6 +745,23 @@
     outline: none;
     border-color: var(--color-primary, #6366f1);
   }
+  
+  .text-input.input-valid {
+    border-color: #10b981;
+  }
+  
+  .text-input.input-invalid {
+    border-color: #ef4444;
+  }
+  
+  .key-status {
+    font-size: 0.75rem;
+    margin: 0.25rem 0 0;
+    padding: 0;
+  }
+  .key-status.checking { color: var(--color-text-muted, #8888a0); }
+  .key-status.valid { color: #10b981; }
+  .key-status.invalid { color: #ef4444; }
   
   .icon-btn {
     background: transparent;

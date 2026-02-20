@@ -96,8 +96,16 @@ impl SettingsStore {
         let json = serde_json::to_string_pretty(settings)
             .with_context(|| "Failed to serialize settings")?;
 
-        fs::write(&settings_path, json)
+        fs::write(&settings_path, &json)
             .with_context(|| format!("Failed to write settings file: {:?}", settings_path))?;
+
+        // Restrict file permissions (owner-only) since it may contain API keys
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&settings_path, perms);
+        }
 
         Ok(())
     }
@@ -195,6 +203,8 @@ mod tests {
                 hotkey_hebrew: "Alt+H".to_string(),
                 hotkey_mode: HotkeyMode::Toggle,
                 recording_mode: super::super::RecordingMode::Live,
+                transcription_engine: super::super::TranscriptionEngine::default(),
+                openai_api_key: None,
                 live_transcription: true,
                 model_path: Some(PathBuf::from("/custom/model.bin")),
                 model_size: ModelSize::Small,
