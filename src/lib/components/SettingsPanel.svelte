@@ -366,13 +366,14 @@
           </div>
         </section>
         
+        {#if localSettings.transcription_engine !== 'openai'}
         <section class="settings-section">
-          <h3>Model</h3>
+          <h3>Local Models</h3>
           
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">Whisper model</span>
-              <span class="setting-desc">Larger = more accurate but slower</span>
+              <span class="setting-label">English model</span>
+              <span class="setting-desc">Used when recording in English. Larger = more accurate but slower.</span>
             </div>
             <select 
               class="select-input"
@@ -406,8 +407,14 @@
           
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">Hebrew model (ivrit-ai)</span>
-              <span class="setting-desc">Optimized for Hebrew, turbo (~1.6GB). Much better accuracy.</span>
+              <span class="setting-label">Hebrew model</span>
+              <span class="setting-desc">
+                {#if hebrewModelStatus.downloaded}
+                  ivrit-ai turbo — used automatically when recording in Hebrew.
+                {:else}
+                  ivrit-ai turbo (~1.6GB). Much better Hebrew accuracy. Falls back to English model if not installed.
+                {/if}
+              </span>
             </div>
             {#if hebrewModelStatus.downloaded}
               <span class="badge badge-success">✓ Installed</span>
@@ -418,6 +425,7 @@
             {/if}
           </div>
         </section>
+        {/if}
         
         <section class="settings-section">
           <h3>System</h3>
