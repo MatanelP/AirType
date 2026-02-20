@@ -301,15 +301,15 @@
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Engine</span>
-              <span class="setting-desc">Local Whisper is free & offline. OpenAI requires API key.</span>
+              <span class="setting-desc">Local Whisper is free & offline. OpenAI streams text live.</span>
             </div>
             <select 
               class="select-input"
               value={localSettings.transcription_engine || 'localwhisper'}
               onchange={(e) => updateSetting('transcription_engine', e.target.value)}
             >
-              <option value="localwhisper">Local Whisper (free)</option>
-              <option value="openai">OpenAI Realtime API</option>
+              <option value="localwhisper">Local Whisper (free, offline)</option>
+              <option value="openai">OpenAI (paid, live)</option>
             </select>
           </div>
           
@@ -341,7 +341,9 @@
             {:else if keyValidation === 'invalid'}
               <p class="key-status invalid">✗ Invalid API key</p>
             {/if}
-            <p class="section-note">Uses gpt-4o-transcribe for real-time streaming. Your key is stored locally with restricted file permissions and never sent anywhere except OpenAI.</p>
+            <p class="section-note">Uses gpt-4o-transcribe. Text streams live as you speak. Your key is stored locally with restricted permissions.</p>
+          {:else}
+            <p class="section-note">Text appears after you stop recording. No internet or API key needed.</p>
           {/if}
         </section>
         
@@ -361,21 +363,6 @@
               <option value="hold">Hold to record</option>
               <option value="toggle">Toggle recording</option>
             </select>
-          </div>
-          
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">Live transcription</span>
-              <span class="setting-desc">Show text as you speak (experimental)</span>
-            </div>
-            <label class="toggle">
-              <input 
-                type="checkbox" 
-                checked={localSettings.live_transcription || false}
-                onchange={(e) => updateSetting('live_transcription', e.target.checked)}
-              />
-              <span class="toggle-slider"></span>
-            </label>
           </div>
         </section>
         
