@@ -36,8 +36,19 @@ pub enum RecordingMode {
     /// Record all audio, then transcribe at once
     #[default]
     Batch,
-    /// Stream audio and transcribe in chunks
+    /// Stream audio and transcribe in chunks (requires OpenAI API)
     Live,
+}
+
+/// Transcription engine to use
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TranscriptionEngine {
+    /// Local Whisper model (free, offline)
+    #[default]
+    LocalWhisper,
+    /// OpenAI API (requires API key, supports live streaming)
+    OpenAI,
 }
 
 /// Whisper model size
@@ -92,6 +103,12 @@ pub struct Settings {
     pub hotkey_mode: HotkeyMode,
     /// Recording and transcription mode
     pub recording_mode: RecordingMode,
+    /// Which transcription engine to use
+    #[serde(default)]
+    pub transcription_engine: TranscriptionEngine,
+    /// OpenAI API key (required for OpenAI engine)
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
     /// Whether to show transcription live as you speak
     pub live_transcription: bool,
     /// Custom path to Whisper model file (overrides model_size if set)
@@ -113,6 +130,8 @@ impl Default for Settings {
             hotkey_hebrew: "Ctrl+Shift+H".to_string(),
             hotkey_mode: HotkeyMode::default(),
             recording_mode: RecordingMode::default(),
+            transcription_engine: TranscriptionEngine::default(),
+            openai_api_key: None,
             live_transcription: false,
             model_path: None,
             model_size: ModelSize::default(),

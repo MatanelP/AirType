@@ -40,6 +40,15 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["stream"] }
 futures-util = "0.3"
 
+# WebSocket for OpenAI Realtime API
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# HTTP types (used by tokio-tungstenite for request building)
+http = "1"
+
+# Base64 encoding for audio data
+base64 = "0.22"
+
 # Error handling
 anyhow = "1"
 thiserror = "1"

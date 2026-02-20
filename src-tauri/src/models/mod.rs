@@ -10,6 +10,10 @@ use tokio::io::AsyncWriteExt;
 /// Base URL for Whisper model downloads
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
+/// Hebrew-optimized model URL (ivrit-ai)
+const HEBREW_MODEL_URL: &str = "https://huggingface.co/ivrit-ai/whisper-large-v3-ggml/resolve/main/ggml-model-q5_0.bin";
+const HEBREW_MODEL_FILENAME: &str = "ggml-ivrit-large-v3-q5.bin";
+
 /// Get the filename for a model size
 pub fn model_filename(size: ModelSize) -> &'static str {
     match size {
@@ -31,9 +35,19 @@ pub fn model_path(size: ModelSize) -> PathBuf {
     SettingsStore::get_models_dir().join(model_filename(size))
 }
 
+/// Get the local path for the Hebrew model
+pub fn hebrew_model_path() -> PathBuf {
+    SettingsStore::get_models_dir().join(HEBREW_MODEL_FILENAME)
+}
+
 /// Check if a model exists locally
 pub fn model_exists(size: ModelSize) -> bool {
     model_path(size).exists()
+}
+
+/// Check if the Hebrew model exists locally
+pub fn hebrew_model_exists() -> bool {
+    hebrew_model_path().exists()
 }
 
 /// Get approximate model size in MB for display
@@ -47,6 +61,11 @@ pub fn model_size_mb(size: ModelSize) -> u64 {
     }
 }
 
+/// Get Hebrew model size in MB
+pub fn hebrew_model_size_mb() -> u64 {
+    600 // ~600MB for q5_0 quantized version
+}
+
 /// Download a model with progress reporting
 pub async fn download_model(
     size: ModelSize,
@@ -54,7 +73,23 @@ pub async fn download_model(
 ) -> Result<PathBuf, String> {
     let url = model_url(size);
     let path = model_path(size);
+    download_from_url(&url, &path, on_progress).await
+}
 
+/// Download the Hebrew-optimized model
+pub async fn download_hebrew_model(
+    on_progress: Option<impl Fn(u64, u64) + Send + 'static>,
+) -> Result<PathBuf, String> {
+    let path = hebrew_model_path();
+    download_from_url(HEBREW_MODEL_URL, &path, on_progress).await
+}
+
+/// Generic download function
+async fn download_from_url(
+    url: &str,
+    path: &PathBuf,
+    on_progress: Option<impl Fn(u64, u64) + Send + 'static>,
+) -> Result<PathBuf, String> {
     // Ensure models directory exists
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -62,10 +97,10 @@ pub async fn download_model(
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
     }
 
-    log::info!("Downloading model {} from {}", model_filename(size), url);
+    log::info!("Downloading model from {}", url);
 
     // Start download
-    let response = reqwest::get(&url)
+    let response = reqwest::get(url)
         .await
         .map_err(|e| format!("Failed to start download: {}", e))?;
 
@@ -107,7 +142,7 @@ pub async fn download_model(
         .map_err(|e| format!("Failed to finalize download: {}", e))?;
 
     log::info!("Model download complete: {}", path.display());
-    Ok(path)
+    Ok(path.clone())
 }
 
 #[cfg(test)]
@@ -133,5 +168,11 @@ mod tests {
     fn test_model_path() {
         let path = model_path(ModelSize::Base);
         assert!(path.to_string_lossy().contains("ggml-base.bin"));
+    }
+    
+    #[test]
+    fn test_hebrew_model_path() {
+        let path = hebrew_model_path();
+        assert!(path.to_string_lossy().contains("ggml-ivrit"));
     }
 }

@@ -16,8 +16,10 @@
   let saveTimeout = $state(null);
   let recordingHotkeyFor = $state(null);
   let modelStatus = $state([]);
+  let hebrewModelStatus = $state({ downloaded: false, size_mb: 600 });
   let downloadingModel = $state(null);
   let downloadProgress = $state(0);
+  let showApiKey = $state(false);
 
   // Sync localSettings when settings prop changes
   $effect(() => {
@@ -27,6 +29,7 @@
   $effect(() => {
     if (isOpen) {
       loadModelStatus();
+      loadHebrewModelStatus();
     }
   });
 
@@ -64,6 +67,26 @@
       await invoke('download_model', { size });
     } catch (e) {
       console.error('Failed to download model:', e);
+      downloadingModel = null;
+    }
+  }
+
+  async function loadHebrewModelStatus() {
+    try {
+      hebrewModelStatus = await invoke('get_hebrew_model_status');
+    } catch (e) {
+      console.error('Failed to load Hebrew model status:', e);
+    }
+  }
+
+  async function downloadHebrewModel() {
+    downloadingModel = 'hebrew';
+    downloadProgress = 0;
+    try {
+      await invoke('download_hebrew_model');
+      await loadHebrewModelStatus();
+    } catch (e) {
+      console.error('Failed to download Hebrew model:', e);
       downloadingModel = null;
     }
   }
@@ -251,6 +274,47 @@
         </section>
         
         <section class="settings-section">
+          <h3>Transcription Engine</h3>
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Engine</span>
+              <span class="setting-desc">Local Whisper is free & offline. OpenAI requires API key.</span>
+            </div>
+            <select 
+              class="select-input"
+              value={localSettings.transcription_engine || 'localwhisper'}
+              onchange={(e) => updateSetting('transcription_engine', e.target.value)}
+            >
+              <option value="localwhisper">Local Whisper (free)</option>
+              <option value="openai">OpenAI Realtime API</option>
+            </select>
+          </div>
+          
+          {#if localSettings.transcription_engine === 'openai'}
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">OpenAI API Key</span>
+                <span class="setting-desc">Required for live streaming transcription</span>
+              </div>
+              <div class="api-key-input">
+                <input 
+                  type={showApiKey ? 'text' : 'password'}
+                  class="text-input"
+                  placeholder="sk-..."
+                  value={localSettings.openai_api_key || ''}
+                  oninput={(e) => updateSetting('openai_api_key', e.target.value)}
+                />
+                <button class="icon-btn" onclick={() => showApiKey = !showApiKey} aria-label="Toggle visibility">
+                  {showApiKey ? '🙈' : '👁'}
+                </button>
+              </div>
+            </div>
+            <p class="section-note">Uses gpt-4o-transcribe for real-time streaming. Live mode is automatic.</p>
+          {/if}
+        </section>
+        
+        <section class="settings-section">
           <h3>Recording</h3>
           
           <div class="setting-row">
@@ -321,6 +385,20 @@
               <span class="progress-text">{downloadProgress.toFixed(0)}%</span>
             </div>
           {/if}
+          
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Hebrew model (ivrit-ai)</span>
+              <span class="setting-desc">Optimized for Hebrew (~{hebrewModelStatus.size_mb}MB). 29% better accuracy.</span>
+            </div>
+            {#if hebrewModelStatus.downloaded}
+              <span class="badge badge-success">✓ Installed</span>
+            {:else}
+              <button class="download-btn" onclick={downloadHebrewModel} disabled={downloadingModel === 'hebrew'}>
+                {downloadingModel === 'hebrew' ? 'Downloading...' : 'Download'}
+              </button>
+            {/if}
+          </div>
         </section>
         
         <section class="settings-section">
@@ -614,4 +692,61 @@
     color: var(--color-text-muted, #8888a0);
     text-align: right;
   }
+  
+  .api-key-input {
+    display: flex;
+    gap: 0.25rem;
+    align-items: center;
+  }
+  
+  .text-input {
+    padding: 0.5rem 0.75rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-text, #f0f0f5);
+    font-size: 0.8125rem;
+    font-family: monospace;
+    width: 180px;
+  }
+  
+  .text-input:focus {
+    outline: none;
+    border-color: var(--color-primary, #6366f1);
+  }
+  
+  .icon-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 0.25rem;
+  }
+  
+  .badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-weight: 500;
+  }
+  
+  .badge-success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+  }
+  
+  .download-btn {
+    padding: 0.375rem 1rem;
+    background: var(--color-primary, #6366f1);
+    border: none;
+    border-radius: var(--radius-md, 8px);
+    color: white;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  
+  .download-btn:hover { opacity: 0.85; }
+  .download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
