@@ -152,10 +152,16 @@ impl WhisperTranscriber {
         // Single segment mode for cleaner output
         params.set_single_segment(false);
 
-        // Print progress and timestamps disabled for cleaner output
-        params.set_print_progress(false);
+        // Show progress so user knows model is working
+        params.set_print_progress(true);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+
+        // Use all available CPU cores for faster inference
+        let n_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as i32)
+            .unwrap_or(4);
+        params.set_n_threads(n_threads);
 
         // Token timestamps for streaming
         params.set_token_timestamps(true);
@@ -181,9 +187,11 @@ impl WhisperTranscriber {
         let mut wh_state = whisper_state.context.create_state()?;
         let params = self.create_params();
 
+        log::info!("Starting transcription of {} samples ({:.1}s audio)...", audio.len(), audio.len() as f64 / 16000.0);
         wh_state
             .full(params, audio)
             .map_err(|e| TranscriptionError::TranscriptionFailed(e.to_string()))?;
+        log::info!("Transcription inference complete");
 
         // Collect all segments
         let num_segments = wh_state.full_n_segments();
