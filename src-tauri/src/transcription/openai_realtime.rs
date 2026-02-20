@@ -226,6 +226,7 @@ impl OpenAIRealtimeTranscriber {
             let resample_ratio = 24000.0_f64 / 16000.0_f64; // 1.5x
             let mut resample_pos: f64 = 0.0;
             let mut last_sample: f32 = 0.0;
+            let mut total_samples_sent: usize = 0;
 
             while let Some(samples) = audio_rx.recv().await {
                 // Resample 16kHz → 24kHz via linear interpolation
@@ -266,15 +267,25 @@ impl OpenAIRealtimeTranscriber {
                         log::warn!("WebSocket write failed, stopping audio sender");
                         break;
                     }
+                    total_samples_sent += resampled.len();
                 }
             }
+            log::info!("Total 24kHz samples sent to OpenAI: {} ({:.1}s)", total_samples_sent, total_samples_sent as f64 / 24000.0);
 
             // Commit any remaining audio when the channel closes (recording stopped)
+            log::info!("Audio channel closed, committing buffer to OpenAI...");
             let commit = ClientEvent::InputAudioBufferCommit {};
             if let Ok(json) = serde_json::to_string(&commit) {
                 let _ = write.send(Message::Text(json)).await;
             }
+            // Don't close the WebSocket yet — let the reader task receive the transcription.
+            // The server will close the connection after responding, or we'll time out.
+            // Keep the write half alive so the connection stays open.
+            log::info!("Commit sent, waiting for transcription response...");
+            // Hold the writer open for up to 10 seconds to allow transcription to arrive
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             let _ = write.close().await;
+            log::info!("OpenAI WebSocket writer closed");
         });
 
         Ok(audio_tx)
