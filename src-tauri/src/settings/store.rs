@@ -205,6 +205,8 @@ mod tests {
                 recording_mode: super::super::RecordingMode::Live,
                 transcription_engine: super::super::TranscriptionEngine::default(),
                 openai_api_key: None,
+                runpod_api_key: None,
+                runpod_endpoint_id: None,
                 live_transcription: true,
                 model_path: Some(PathBuf::from("/custom/model.bin")),
                 model_size: ModelSize::Small,

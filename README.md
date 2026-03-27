@@ -10,7 +10,7 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 - 🌍 **English & Hebrew** — Separate hotkeys, each with the best model for the language
 - ⚡ **Two Engines**:
   - **Local Whisper** (free, offline) — runs on your CPU, no internet needed
-  - **Paid API** — OpenAI Realtime (English live) + HuggingFace ivrit-ai (Hebrew)
+  - **Paid API** — OpenAI Realtime (English live) + RunPod ivrit-ai (Hebrew)
 - 🔴 **Floating Indicator** — Small on-screen dot shows recording/processing state
 - 🪶 **Lightweight** — Near-zero CPU/RAM when idle
 - 🖥️ **System Tray** — Runs quietly in the background
@@ -22,12 +22,12 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 
 | | English (`Ctrl+Shift+E`) | Hebrew (`Ctrl+Shift+H`) |
 |---|---|---|
-| **Service** | OpenAI Realtime API | HuggingFace Inference API |
-| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3` |
+| **Service** | OpenAI Realtime API | RunPod Serverless (ivrit-ai) |
+| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3-turbo-ct2` |
 | **Mode** | **Live** — text streams as you speak | **Batch** — text after you stop |
-| **Key** | OpenAI (`sk-...`) | HuggingFace (`hf_...`) |
-| **Quality** | ⭐ Great | ⭐ Great |
-| **Speed** | Real-time | ~2-3s after stop |
+| **Key** | OpenAI (`sk-...`) | RunPod API key + Endpoint ID |
+| **Quality** | ⭐ Great | ⭐ Best Hebrew | 
+| **Speed** | Real-time | ~2-5s after stop |
 
 ### Engine: **Local Whisper (free, offline)**
 
@@ -103,8 +103,13 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 ### Paid (API Keys)
 
 1. **OpenAI key** (for English live): [platform.openai.com/api-keys](https://platform.openai.com/api-keys) → Create key
-2. **HuggingFace key** (for Hebrew): [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) → Create token with "Make calls to Inference Providers" permission
-3. Open AirType Settings → select "OpenAI (paid, live)" → paste both keys
+2. **RunPod** (for Hebrew):
+   - Sign up at [runpod.io](https://runpod.io)
+   - Deploy ivrit-ai from [RunPod Hub](https://www.runpod.io/console/hub/ivrit-ai/runpod-serverless) → Click "Deploy"
+   - Set Active Workers to 0 (scale-to-zero, pay only when you use it)
+   - Copy your API Key from [Settings → API Keys](https://www.runpod.io/console/user/settings)
+   - Copy the Endpoint ID from your deployed endpoint
+3. Open AirType Settings → select "OpenAI (paid, live)" → paste all keys
 
 ## Usage
 
@@ -124,7 +129,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 │  ├─ Recording Indicator       │  ├─ Audio Capture (cpal)      │
 │  └─ Floating Status Window    │  ├─ Local Whisper (whisper-rs) │
 │                               │  ├─ OpenAI Realtime (WS)      │
-│                               │  ├─ HuggingFace Inference API  │
+│                               │  ├─ RunPod ivrit-ai API       │
 │                               │  ├─ Text Injector (enigo)      │
 │                               │  └─ Settings Store (JSON)      │
 ├──────────────────────────────────────────────────────────────┤
@@ -139,7 +144,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 - **Frontend**: [Svelte 5](https://svelte.dev/)
 - **Local STT**: [whisper-rs](https://github.com/tazz4843/whisper-rs) (whisper.cpp bindings)
 - **Live STT**: OpenAI Realtime API (WebSocket)
-- **Hebrew STT**: [ivrit-ai/whisper-large-v3](https://huggingface.co/ivrit-ai/whisper-large-v3) via HuggingFace (fal-ai provider)
+- **Hebrew STT**: [ivrit-ai/whisper-large-v3-turbo](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo) via [RunPod Serverless](https://github.com/ivrit-ai/runpod-serverless)
 - **Audio**: [cpal](https://github.com/RustAudio/cpal)
 - **Text Injection**: [enigo](https://github.com/enigo-rs/enigo)
 
@@ -162,7 +167,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 - Verify keys in Settings (green ✓ = valid)
 - Check internet connection
 - OpenAI: ensure billing is set up at platform.openai.com
-- HuggingFace: ensure "Inference Providers" permission on token
+- RunPod: check that endpoint has at least 1 max worker, and endpoint ID is correct
 
 ## Development
 

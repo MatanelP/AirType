@@ -27,7 +27,7 @@ use hotkeys::{
 };
 use injection::TextInjector;
 use settings::{ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
-use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber, transcribe_hebrew, validate_hf_key};
+use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber, transcribe_hebrew, validate_runpod};
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
@@ -156,11 +156,13 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
     match settings.transcription_engine {
         TranscriptionEngine::OpenAI => {
             if language == "he" {
-                // Hebrew: just capture audio, will use HuggingFace batch API on stop
-                let hf_key = settings.huggingface_api_key
+                // Hebrew: just capture audio, will use RunPod ivrit-ai batch API on stop
+                let _rp_key = settings.runpod_api_key
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "HuggingFace API key not set. Go to Settings to add it.".to_string())?;
-                let _ = hf_key; // validated, will read again on stop
+                    .ok_or_else(|| "RunPod API key not set. Go to Settings to add it.".to_string())?;
+                let _rp_endpoint = settings.runpod_endpoint_id
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
 
                 let capture = AudioCapture::new()
                     .map_err(|e| format!("Failed to initialize audio: {}", e))?;
@@ -171,7 +173,7 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                 *state.is_recording.write() = true;
 
                 let _ = app.emit("recording-started", ());
-                log::info!("Recording started (HuggingFace ivrit-ai for Hebrew)");
+                log::info!("Recording started (RunPod ivrit-ai for Hebrew)");
             } else {
                 // English: OpenAI Realtime API for live streaming
                 let api_key = settings.openai_api_key
@@ -277,11 +279,14 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                 let _ = app.emit("transcribing", ());
                 indicator_transcribing(&app);
 
-                let hf_key = settings.huggingface_api_key
+                let rp_key = settings.runpod_api_key
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "HuggingFace API key not set".to_string())?;
+                    .ok_or_else(|| "RunPod API key not set".to_string())?;
+                let rp_endpoint = settings.runpod_endpoint_id
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "RunPod Endpoint ID not set".to_string())?;
 
-                let transcription = transcribe_hebrew(&hf_key, &samples).await?;
+                let transcription = transcribe_hebrew(&rp_key, &rp_endpoint, &samples).await?;
 
                 log::info!("Hebrew transcription: {}", transcription);
                 *state.last_transcription.write() = transcription.clone();
@@ -415,13 +420,13 @@ async fn validate_openai_key(api_key: String) -> Result<bool, String> {
     Ok(resp.status().is_success())
 }
 
-/// Validate a HuggingFace API key
+/// Validate RunPod API key and endpoint ID
 #[tauri::command]
-async fn validate_huggingface_key(api_key: String) -> Result<bool, String> {
-    if api_key.is_empty() {
+async fn validate_runpod_key(api_key: String, endpoint_id: String) -> Result<bool, String> {
+    if api_key.is_empty() || endpoint_id.is_empty() {
         return Ok(false);
     }
-    Ok(validate_hf_key(&api_key).await)
+    Ok(validate_runpod(&api_key, &endpoint_id).await)
 }
 
 /// Set recording mode
@@ -712,7 +717,7 @@ pub fn run() {
             get_model_status,
             download_model,
             validate_openai_key,
-            validate_huggingface_key,
+            validate_runpod_key,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");

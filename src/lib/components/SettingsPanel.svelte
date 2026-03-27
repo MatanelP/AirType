@@ -71,9 +71,9 @@
   }
 
   let keyValidateTimeout = null;
-  let hfKeyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
-  let showHfKey = $state(false);
-  let hfKeyValidateTimeout = null;
+  let rpKeyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
+  let showRpKey = $state(false);
+  let rpKeyValidateTimeout = null;
 
   async function validateApiKey(key) {
     if (!key || key.length < 10) {
@@ -95,24 +95,30 @@
     keyValidateTimeout = setTimeout(() => validateApiKey(value), 800);
   }
 
-  async function validateHfKey(key) {
-    if (!key || key.length < 10) {
-      hfKeyValidation = null;
+  async function validateRpKey(key, endpointId) {
+    if (!key || key.length < 10 || !endpointId || endpointId.length < 5) {
+      rpKeyValidation = null;
       return;
     }
-    hfKeyValidation = 'checking';
+    rpKeyValidation = 'checking';
     try {
-      const valid = await invoke('validate_huggingface_key', { apiKey: key });
-      hfKeyValidation = valid ? 'valid' : 'invalid';
+      const valid = await invoke('validate_runpod_key', { apiKey: key, endpointId });
+      rpKeyValidation = valid ? 'valid' : 'invalid';
     } catch (e) {
-      hfKeyValidation = 'invalid';
+      rpKeyValidation = 'invalid';
     }
   }
 
-  function handleHfKeyChange(value) {
-    updateSetting('huggingface_api_key', value);
-    if (hfKeyValidateTimeout) clearTimeout(hfKeyValidateTimeout);
-    hfKeyValidateTimeout = setTimeout(() => validateHfKey(value), 800);
+  function handleRpKeyChange(value) {
+    updateSetting('runpod_api_key', value);
+    if (rpKeyValidateTimeout) clearTimeout(rpKeyValidateTimeout);
+    rpKeyValidateTimeout = setTimeout(() => validateRpKey(value, localSettings.runpod_endpoint_id || ''), 800);
+  }
+
+  function handleRpEndpointChange(value) {
+    updateSetting('runpod_endpoint_id', value);
+    if (rpKeyValidateTimeout) clearTimeout(rpKeyValidateTimeout);
+    rpKeyValidateTimeout = setTimeout(() => validateRpKey(localSettings.runpod_api_key || '', value), 800);
   }
 
   async function saveSettings() {
@@ -346,35 +352,53 @@
             
             <div class="setting-row">
               <div class="setting-info">
-                <span class="setting-label">HuggingFace API Key</span>
-                <span class="setting-desc">For Hebrew transcription (ivrit-ai/whisper-large-v3)</span>
+                <span class="setting-label">RunPod API Key</span>
+                <span class="setting-desc">For Hebrew transcription (ivrit-ai via RunPod Serverless)</span>
               </div>
               <div class="api-key-input">
                 <input 
-                  type={showHfKey ? 'text' : 'password'}
+                  type={showRpKey ? 'text' : 'password'}
                   class="text-input"
-                  class:input-valid={hfKeyValidation === 'valid'}
-                  class:input-invalid={hfKeyValidation === 'invalid'}
-                  placeholder="hf_..."
-                  value={localSettings.huggingface_api_key || ''}
-                  oninput={(e) => handleHfKeyChange(e.target.value)}
+                  class:input-valid={rpKeyValidation === 'valid'}
+                  class:input-invalid={rpKeyValidation === 'invalid'}
+                  placeholder="rp_..."
+                  value={localSettings.runpod_api_key || ''}
+                  oninput={(e) => handleRpKeyChange(e.target.value)}
                 />
-                <button class="icon-btn" onclick={() => showHfKey = !showHfKey} aria-label="Toggle visibility">
-                  {showHfKey ? '🙈' : '👁'}
+                <button class="icon-btn" onclick={() => showRpKey = !showRpKey} aria-label="Toggle visibility">
+                  {showRpKey ? '🙈' : '👁'}
                 </button>
               </div>
             </div>
-            {#if hfKeyValidation === 'checking'}
-              <p class="key-status checking">⏳ Validating key...</p>
-            {:else if hfKeyValidation === 'valid'}
-              <p class="key-status valid">✓ HuggingFace key is valid</p>
-            {:else if hfKeyValidation === 'invalid'}
-              <p class="key-status invalid">✗ Invalid HuggingFace key</p>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">RunPod Endpoint ID</span>
+                <span class="setting-desc">Deploy ivrit-ai from <a href="https://www.runpod.io/console/hub/ivrit-ai/runpod-serverless" target="_blank" style="color: var(--accent)">RunPod Hub</a></span>
+              </div>
+              <div class="api-key-input">
+                <input 
+                  type="text"
+                  class="text-input"
+                  class:input-valid={rpKeyValidation === 'valid'}
+                  class:input-invalid={rpKeyValidation === 'invalid'}
+                  placeholder="e.g. abc123xyz"
+                  value={localSettings.runpod_endpoint_id || ''}
+                  oninput={(e) => handleRpEndpointChange(e.target.value)}
+                />
+              </div>
+            </div>
+            {#if rpKeyValidation === 'checking'}
+              <p class="key-status checking">⏳ Validating RunPod endpoint...</p>
+            {:else if rpKeyValidation === 'valid'}
+              <p class="key-status valid">✓ RunPod endpoint is reachable</p>
+            {:else if rpKeyValidation === 'invalid'}
+              <p class="key-status invalid">✗ Cannot reach endpoint — check API key and endpoint ID</p>
             {/if}
             
             <p class="section-note">
               <strong>English</strong>: Live streaming via OpenAI (text appears as you speak).<br/>
-              <strong>Hebrew</strong>: Best-in-class ivrit-ai model via HuggingFace (text after recording).
+              <strong>Hebrew</strong>: Best-in-class ivrit-ai model via RunPod Serverless (pay-per-second, text after recording).
             </p>
           {:else}
             <p class="section-note">Text appears after you stop recording. No internet or API key needed.</p>
