@@ -71,6 +71,10 @@
   }
 
   let keyValidateTimeout = null;
+  let hfKeyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
+  let showHfKey = $state(false);
+  let hfKeyValidateTimeout = null;
+
   async function validateApiKey(key) {
     if (!key || key.length < 10) {
       keyValidation = null;
@@ -89,6 +93,26 @@
     updateSetting('openai_api_key', value);
     if (keyValidateTimeout) clearTimeout(keyValidateTimeout);
     keyValidateTimeout = setTimeout(() => validateApiKey(value), 800);
+  }
+
+  async function validateHfKey(key) {
+    if (!key || key.length < 10) {
+      hfKeyValidation = null;
+      return;
+    }
+    hfKeyValidation = 'checking';
+    try {
+      const valid = await invoke('validate_huggingface_key', { apiKey: key });
+      hfKeyValidation = valid ? 'valid' : 'invalid';
+    } catch (e) {
+      hfKeyValidation = 'invalid';
+    }
+  }
+
+  function handleHfKeyChange(value) {
+    updateSetting('huggingface_api_key', value);
+    if (hfKeyValidateTimeout) clearTimeout(hfKeyValidateTimeout);
+    hfKeyValidateTimeout = setTimeout(() => validateHfKey(value), 800);
   }
 
   async function saveSettings() {
@@ -295,7 +319,7 @@
             <div class="setting-row">
               <div class="setting-info">
                 <span class="setting-label">OpenAI API Key</span>
-                <span class="setting-desc">Required for live streaming transcription</span>
+                <span class="setting-desc">For English live transcription (gpt-4o-transcribe)</span>
               </div>
               <div class="api-key-input">
                 <input 
@@ -319,7 +343,39 @@
             {:else if keyValidation === 'invalid'}
               <p class="key-status invalid">✗ Invalid API key</p>
             {/if}
-            <p class="section-note">Uses gpt-4o-transcribe. Text streams live as you speak. Your key is stored locally with restricted permissions.</p>
+            
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">HuggingFace API Key</span>
+                <span class="setting-desc">For Hebrew transcription (ivrit-ai/whisper-large-v3-turbo)</span>
+              </div>
+              <div class="api-key-input">
+                <input 
+                  type={showHfKey ? 'text' : 'password'}
+                  class="text-input"
+                  class:input-valid={hfKeyValidation === 'valid'}
+                  class:input-invalid={hfKeyValidation === 'invalid'}
+                  placeholder="hf_..."
+                  value={localSettings.huggingface_api_key || ''}
+                  oninput={(e) => handleHfKeyChange(e.target.value)}
+                />
+                <button class="icon-btn" onclick={() => showHfKey = !showHfKey} aria-label="Toggle visibility">
+                  {showHfKey ? '🙈' : '👁'}
+                </button>
+              </div>
+            </div>
+            {#if hfKeyValidation === 'checking'}
+              <p class="key-status checking">⏳ Validating key...</p>
+            {:else if hfKeyValidation === 'valid'}
+              <p class="key-status valid">✓ HuggingFace key is valid</p>
+            {:else if hfKeyValidation === 'invalid'}
+              <p class="key-status invalid">✗ Invalid HuggingFace key</p>
+            {/if}
+            
+            <p class="section-note">
+              <strong>English</strong>: Live streaming via OpenAI (text appears as you speak).<br/>
+              <strong>Hebrew</strong>: Best-in-class ivrit-ai model via HuggingFace (text after recording).
+            </p>
           {:else}
             <p class="section-note">Text appears after you stop recording. No internet or API key needed.</p>
           {/if}

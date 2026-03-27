@@ -109,6 +109,9 @@ pub struct Settings {
     /// OpenAI API key (required for OpenAI engine)
     #[serde(default)]
     pub openai_api_key: Option<String>,
+    /// HuggingFace API key (used for Hebrew ivrit-ai model)
+    #[serde(default)]
+    pub huggingface_api_key: Option<String>,
     /// Whether to show transcription live as you speak
     pub live_transcription: bool,
     /// Custom path to Whisper model file (overrides model_size if set)
@@ -132,6 +135,7 @@ impl Default for Settings {
             recording_mode: RecordingMode::default(),
             transcription_engine: TranscriptionEngine::default(),
             openai_api_key: None,
+            huggingface_api_key: None,
             live_transcription: false,
             model_path: None,
             model_size: ModelSize::default(),

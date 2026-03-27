@@ -27,7 +27,7 @@ use hotkeys::{
 };
 use injection::TextInjector;
 use settings::{ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
-use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber};
+use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber, transcribe_hebrew, validate_hf_key};
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
@@ -155,47 +155,64 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
 
     match settings.transcription_engine {
         TranscriptionEngine::OpenAI => {
-            // OpenAI Realtime API path
-            let api_key = settings.openai_api_key
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| "OpenAI API key not set. Go to Settings → Transcription Engine.".to_string())?;
+            if language == "he" {
+                // Hebrew: just capture audio, will use HuggingFace batch API on stop
+                let hf_key = settings.huggingface_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "HuggingFace API key not set. Go to Settings to add it.".to_string())?;
+                let _ = hf_key; // validated, will read again on stop
 
-            let transcriber = OpenAIRealtimeTranscriber::new(&api_key);
-            transcriber.set_language(&language);
+                let capture = AudioCapture::new()
+                    .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+                capture.start_recording()
+                    .map_err(|e| format!("Failed to start recording: {}", e))?;
 
-            let app_for_callback = app.clone();
-            let callback = Arc::new(move |text: &str, is_final: bool| {
-                if is_final && !text.is_empty() {
-                    log::info!("OpenAI transcription (final): {}", text);
-                    let _ = app_for_callback.emit("transcription-complete", text);
-                    // Inject text at cursor
-                    let text_owned = text.to_string();
-                    let _ = std::thread::spawn(move || {
-                        if let Ok(mut injector) = TextInjector::new() {
-                            let _ = injector.inject_text_with_delay(&text_owned, 10);
-                        }
-                    });
-                } else if !text.is_empty() {
-                    log::debug!("OpenAI transcription (delta): {}", text);
-                    let _ = app_for_callback.emit("transcription-delta", text);
-                }
-            });
+                *state.audio.write() = Some(capture);
+                *state.is_recording.write() = true;
 
-            let audio_tx = transcriber.start_session(callback).await?;
+                let _ = app.emit("recording-started", ());
+                log::info!("Recording started (HuggingFace ivrit-ai for Hebrew)");
+            } else {
+                // English: OpenAI Realtime API for live streaming
+                let api_key = settings.openai_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "OpenAI API key not set. Go to Settings → Transcription Engine.".to_string())?;
 
-            // Start audio capture and stream to OpenAI
-            let capture = AudioCapture::new()
-                .map_err(|e| format!("Failed to initialize audio: {}", e))?;
-            capture.set_stream_sender(audio_tx.clone());
-            capture.start_recording()
-                .map_err(|e| format!("Failed to start recording: {}", e))?;
+                let transcriber = OpenAIRealtimeTranscriber::new(&api_key);
+                transcriber.set_language(&language);
 
-            *state.openai_audio_tx.write() = Some(audio_tx);
-            *state.audio.write() = Some(capture);
-            *state.is_recording.write() = true;
+                let app_for_callback = app.clone();
+                let callback = Arc::new(move |text: &str, is_final: bool| {
+                    if is_final && !text.is_empty() {
+                        log::info!("OpenAI transcription (final): {}", text);
+                        let _ = app_for_callback.emit("transcription-complete", text);
+                        let text_owned = text.to_string();
+                        let _ = std::thread::spawn(move || {
+                            if let Ok(mut injector) = TextInjector::new() {
+                                let _ = injector.inject_text_with_delay(&text_owned, 10);
+                            }
+                        });
+                    } else if !text.is_empty() {
+                        log::debug!("OpenAI transcription (delta): {}", text);
+                        let _ = app_for_callback.emit("transcription-delta", text);
+                    }
+                });
 
-            let _ = app.emit("recording-started", ());
-            log::info!("Recording started (OpenAI Realtime)");
+                let audio_tx = transcriber.start_session(callback).await?;
+
+                let capture = AudioCapture::new()
+                    .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+                capture.set_stream_sender(audio_tx.clone());
+                capture.start_recording()
+                    .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+                *state.openai_audio_tx.write() = Some(audio_tx);
+                *state.audio.write() = Some(capture);
+                *state.is_recording.write() = true;
+
+                let _ = app.emit("recording-started", ());
+                log::info!("Recording started (OpenAI Realtime)");
+            }
         }
         TranscriptionEngine::LocalWhisper => {
             // Local Whisper path (existing behavior)
@@ -244,13 +261,64 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     *state.is_recording.write() = false;
     let _ = app.emit("recording-stopped", ());
 
+    let language = state.recording_language.read().clone();
+
     match settings.transcription_engine {
         TranscriptionEngine::OpenAI => {
-            // Close the OpenAI audio sender (triggers commit + close)
-            state.openai_audio_tx.write().take();
-            // Text injection is handled by the callback in start_recording
-            log::info!("Recording stopped (OpenAI). Transcription handled via WebSocket callback.");
-            Ok(String::new())
+            if language == "he" {
+                // Hebrew: use HuggingFace ivrit-ai batch API
+                if samples.is_empty() {
+                    log::warn!("No audio samples captured");
+                    hide_indicator(&app);
+                    return Ok(String::new());
+                }
+
+                log::info!("Captured {} audio samples for Hebrew", samples.len());
+                let _ = app.emit("transcribing", ());
+                indicator_transcribing(&app);
+
+                let hf_key = settings.huggingface_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "HuggingFace API key not set".to_string())?;
+
+                let transcription = transcribe_hebrew(&hf_key, &samples).await?;
+
+                log::info!("Hebrew transcription: {}", transcription);
+                *state.last_transcription.write() = transcription.clone();
+                let _ = app.emit("transcription-complete", &transcription);
+
+                if !transcription.is_empty() {
+                    log::info!("Injecting text: {}", transcription);
+                    let inject_delay = settings.inject_delay_ms;
+                    let inject_result = tokio::task::spawn_blocking(move || {
+                        let mut injector =
+                            TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
+                        if inject_delay > 0 {
+                            injector.inject_text_with_delay(&transcription, inject_delay)
+                        } else {
+                            injector.inject_text(&transcription)
+                        }
+                        .map_err(|e| format!("Failed to inject text: {}", e))
+                    })
+                    .await
+                    .map_err(|e| format!("Injection task failed: {}", e))?;
+
+                    match &inject_result {
+                        Ok(_) => log::info!("Text injected successfully"),
+                        Err(e) => log::error!("Text injection failed: {}", e),
+                    }
+                    inject_result?;
+                    let _ = app.emit("text-injected", ());
+                }
+
+                indicator_done(&app);
+                Ok(state.last_transcription.read().clone())
+            } else {
+                // English: OpenAI Realtime handles transcription via callback
+                state.openai_audio_tx.write().take();
+                log::info!("Recording stopped (OpenAI). Transcription handled via WebSocket callback.");
+                Ok(String::new())
+            }
         }
         TranscriptionEngine::LocalWhisper => {
             if samples.is_empty() {
@@ -345,6 +413,15 @@ async fn validate_openai_key(api_key: String) -> Result<bool, String> {
         .map_err(|e| format!("Request failed: {}", e))?;
     
     Ok(resp.status().is_success())
+}
+
+/// Validate a HuggingFace API key
+#[tauri::command]
+async fn validate_huggingface_key(api_key: String) -> Result<bool, String> {
+    if api_key.is_empty() {
+        return Ok(false);
+    }
+    Ok(validate_hf_key(&api_key).await)
 }
 
 /// Set recording mode
@@ -635,6 +712,7 @@ pub fn run() {
             get_model_status,
             download_model,
             validate_openai_key,
+            validate_huggingface_key,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");
