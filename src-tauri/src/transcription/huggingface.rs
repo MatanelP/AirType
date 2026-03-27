@@ -1,14 +1,14 @@
 //! HuggingFace Inference API client for Hebrew transcription
 //!
-//! Uses the ivrit-ai/whisper-large-v3-turbo model via HuggingFace's
-//! pay-per-use Inference API. Optimized for Hebrew speech recognition.
+//! Uses openai/whisper-large-v3 via HuggingFace's hf-inference provider
+//! with Hebrew language hint. Pay-per-use, runs on HF's GPUs.
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 
 const HF_INFERENCE_URL: &str =
-    "https://router.huggingface.co/fal-ai/models/ivrit-ai/whisper-large-v3";
+    "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3";
 
-/// Transcribe audio using HuggingFace's Inference API with ivrit-ai model.
+/// Transcribe audio using HuggingFace's Inference API with whisper-large-v3.
 ///
 /// # Arguments
 /// * `api_key` - HuggingFace API token (hf_...)
@@ -20,7 +20,7 @@ pub async fn transcribe_hebrew(api_key: &str, audio_samples: &[f32]) -> Result<S
     let wav_bytes = encode_wav(audio_samples, 16000);
 
     log::info!(
-        "Sending {:.1}s of audio to HuggingFace ivrit-ai model...",
+        "Sending {:.1}s of audio to HuggingFace whisper-large-v3 (Hebrew)...",
         audio_samples.len() as f64 / 16000.0
     );
 
