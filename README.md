@@ -1,20 +1,50 @@
 # AirType 🎤✨
 
-**Live Voice-to-Text Desktop App**
+**Voice-to-Text Desktop App — English & Hebrew**
 
-AirType is a lightweight, cross-platform desktop application that transcribes your voice to text and inserts it directly at your cursor position. Works anywhere on your computer with a simple global hotkey.
+AirType is a lightweight, cross-platform desktop application that transcribes your voice to text and inserts it directly at your cursor position. Works anywhere on your computer with global hotkeys.
 
 ## Features
 
-- 🎙️ **Global Hotkey Recording** - Press a hotkey anywhere to start recording
-- 🌍 **Dual Language Support** - English and Hebrew (more coming soon)
-- ⚡ **Two Modes**:
-  - **Batch Mode**: Record → Transcribe → Insert (more accurate)
-  - **Live Mode**: Real-time transcription as you speak
-- 🔒 **100% Offline** - Uses Whisper locally, no data sent to cloud
-- 🪶 **Lightweight** - Near-zero CPU/RAM when idle
-- 🖥️ **System Tray** - Runs quietly in the background
-- 🚀 **Fast** - Optimized for quick transcription
+- 🎙️ **Global Hotkeys** — Record from anywhere with customizable hotkeys
+- 🌍 **English & Hebrew** — Separate hotkeys, each with the best model for the language
+- ⚡ **Two Engines**:
+  - **Local Whisper** (free, offline) — runs on your CPU, no internet needed
+  - **Paid API** — OpenAI Realtime (English live) + HuggingFace ivrit-ai (Hebrew)
+- 🔴 **Floating Indicator** — Small on-screen dot shows recording/processing state
+- 🪶 **Lightweight** — Near-zero CPU/RAM when idle
+- 🖥️ **System Tray** — Runs quietly in the background
+- 🚀 **Auto-start** — Can launch on login
+
+## Transcription Matrix
+
+### Engine: **Paid (API keys required)**
+
+| | English (`Ctrl+Shift+E`) | Hebrew (`Ctrl+Shift+H`) |
+|---|---|---|
+| **Service** | OpenAI Realtime API | HuggingFace Inference API |
+| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3-turbo` |
+| **Mode** | **Live** — text streams as you speak | **Batch** — text after you stop |
+| **Key** | OpenAI (`sk-...`) | HuggingFace (`hf_...`) |
+| **Quality** | ⭐ Great | ⭐ Great |
+| **Speed** | Real-time | ~2-3s after stop |
+
+### Engine: **Local Whisper (free, offline)**
+
+| | English (`Ctrl+Shift+E`) | Hebrew (`Ctrl+Shift+H`) |
+|---|---|---|
+| **Model** | Selected Whisper model | Same model + Hebrew language hint |
+| **Mode** | **Batch** — text after you stop | **Batch** — text after you stop |
+| **Key** | None | None |
+| **Quality** | 👍 Good (`small`+) | 👍 OK (`small`+), 😐 weak on `base` |
+| **Speed** | ~3-10s depending on model size | ~3-10s depending on model size |
+
+### Recording Modes (both engines)
+
+| Mode | How it works |
+|------|-------------|
+| **Hold** | Hold hotkey to record, release to stop |
+| **Toggle** | Press to start, press again to stop |
 
 ## Installation
 
@@ -22,7 +52,6 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 
 #### Linux (Ubuntu/Debian)
 ```bash
-# Install system dependencies
 sudo apt update
 sudo apt install -y \
     libgtk-3-dev \
@@ -35,18 +64,12 @@ sudo apt install -y \
     pkg-config \
     build-essential \
     cmake
-
-# Optional: For GPU acceleration (CUDA)
-# sudo apt install nvidia-cuda-toolkit
 ```
 
 #### macOS
 ```bash
-# Install Xcode Command Line Tools
 xcode-select --install
-
-# Install Homebrew dependencies (optional)
-brew install cmake
+brew install cmake  # optional
 ```
 
 #### Windows
@@ -55,140 +78,99 @@ brew install cmake
 
 ### Building from Source
 
-1. **Clone the repository**
 ```bash
 git clone https://github.com/yourusername/AirType.git
 cd AirType
-```
-
-2. **Install Node.js dependencies**
-```bash
 npm install
+npm run tauri dev      # development
+npm run tauri build    # production
 ```
 
-3. **Download a Whisper model**
-```bash
-# Create models directory
-mkdir -p ~/.config/airtype/models
+## Setup
 
-# Download base model (recommended, ~150MB)
-curl -L -o ~/.config/airtype/models/ggml-base.bin \
-    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+### Free (Local Whisper)
 
-# Or download tiny model for faster but less accurate transcription (~75MB)
-curl -L -o ~/.config/airtype/models/ggml-tiny.bin \
-    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
-```
+No setup needed — a Whisper model will be downloaded automatically on first use. Choose model size in Settings:
 
-4. **Build and run**
-```bash
-# Development mode
-npm run tauri dev
+| Model | Size | Speed | Best for |
+|-------|------|-------|----------|
+| tiny | ~75MB | Fastest | Quick English notes |
+| base | ~150MB | Fast | English (default) |
+| **small** | **~466MB** | **Medium** | **English + Hebrew (recommended)** |
+| medium | ~1.5GB | Slow | Best local accuracy |
+| large | ~3GB | Slowest | Maximum accuracy |
 
-# Build for production
-npm run tauri build
-```
+### Paid (API Keys)
+
+1. **OpenAI key** (for English live): [platform.openai.com/api-keys](https://platform.openai.com/api-keys) → Create key
+2. **HuggingFace key** (for Hebrew): [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) → Create token with "Make calls to Inference Providers" permission
+3. Open AirType Settings → select "OpenAI (paid, live)" → paste both keys
 
 ## Usage
 
-### Default Hotkeys
-
-| Hotkey | Action |
-|--------|--------|
-| `Ctrl+Shift+Space` | Hold to record |
-| `Ctrl+Shift+R` | Toggle recording on/off |
-| `Ctrl+Shift+L` | Toggle language (EN/HE) |
-
-### Quick Start
-
-1. Launch AirType
-2. Place your cursor where you want text inserted
-3. Press and hold `Ctrl+Shift+Space` while speaking
-4. Release to transcribe and insert text
-
-### Settings
-
-Click the ⚙️ icon in the app to configure:
-- Language (English/Hebrew)
-- Recording mode (Batch/Live)
-- Whisper model size
-- Hotkey configuration
-- Start on login
-
-## Model Selection
-
-| Model | Size | Speed | Accuracy | Languages |
-|-------|------|-------|----------|-----------|
-| Tiny | ~75MB | Fastest | Good | EN only (tiny.en) or all |
-| Base | ~150MB | Fast | Better | All |
-| Small | ~500MB | Medium | Great | All |
-| Medium | ~1.5GB | Slow | Excellent | All |
-| Large | ~3GB | Slowest | Best | All |
-
-**Recommendation**: Start with `base` for a good balance of speed and accuracy.
+1. Launch AirType (appears in system tray)
+2. Place your cursor where you want text
+3. Press `Ctrl+Shift+E` (English) or `Ctrl+Shift+H` (Hebrew)
+4. Speak — text is inserted at cursor when done
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     AirType Desktop App                      │
-├─────────────────────────────────────────────────────────────┤
-│  Frontend (Svelte)           │  Backend (Rust/Tauri)        │
-│  ├─ Settings UI              │  ├─ Global Hotkey Manager    │
-│  ├─ Recording Status         │  ├─ Audio Capture (cpal)     │
-│  ├─ Mode Toggle              │  ├─ Whisper Engine           │
-│  └─ Transcription Display    │  ├─ Text Injector (enigo)    │
-│                              │  └─ Settings Store           │
-├─────────────────────────────────────────────────────────────┤
-│                      System Tray                             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      AirType Desktop App                      │
+├──────────────────────────────────────────────────────────────┤
+│  Frontend (Svelte 5)          │  Backend (Rust/Tauri v2)      │
+│  ├─ Settings UI               │  ├─ Global Hotkey Manager     │
+│  ├─ Recording Indicator       │  ├─ Audio Capture (cpal)      │
+│  └─ Floating Status Window    │  ├─ Local Whisper (whisper-rs) │
+│                               │  ├─ OpenAI Realtime (WS)      │
+│                               │  ├─ HuggingFace Inference API  │
+│                               │  ├─ Text Injector (enigo)      │
+│                               │  └─ Settings Store (JSON)      │
+├──────────────────────────────────────────────────────────────┤
+│                       System Tray                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
 
-- **Framework**: [Tauri v2](https://tauri.app/) - Lightweight desktop app framework
+- **Framework**: [Tauri v2](https://tauri.app/)
 - **Backend**: Rust
 - **Frontend**: [Svelte 5](https://svelte.dev/)
-- **Speech-to-Text**: [whisper-rs](https://github.com/tazz4843/whisper-rs) (whisper.cpp bindings)
-- **Audio Capture**: [cpal](https://github.com/RustAudio/cpal)
+- **Local STT**: [whisper-rs](https://github.com/tazz4843/whisper-rs) (whisper.cpp bindings)
+- **Live STT**: OpenAI Realtime API (WebSocket)
+- **Hebrew STT**: [ivrit-ai/whisper-large-v3-turbo](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo) via HuggingFace
+- **Audio**: [cpal](https://github.com/RustAudio/cpal)
 - **Text Injection**: [enigo](https://github.com/enigo-rs/enigo)
 
 ## Troubleshooting
 
 ### Linux: Global hotkeys not working
-- Wayland has limited global hotkey support. Consider using X11.
-- Some desktop environments require accessibility permissions.
+- Wayland has limited global hotkey support — use X11
+- Some DEs require accessibility permissions
 
 ### macOS: Permission denied
-- Go to System Preferences → Security & Privacy → Privacy
-- Enable AirType in both "Accessibility" and "Input Monitoring"
+- System Preferences → Security & Privacy → Privacy
+- Enable AirType in "Accessibility" and "Input Monitoring"
 
 ### Model not loading
-- Ensure the model file exists in `~/.config/airtype/models/`
+- Models stored in `~/.config/airtype/models/`
+- Try a smaller model (tiny) first
 - Check file permissions
-- Try a smaller model (tiny) to test
 
-### No audio input
-- Check your microphone permissions
-- Verify the correct input device is selected
-- Test with another audio recording app
+### API transcription not working
+- Verify keys in Settings (green ✓ = valid)
+- Check internet connection
+- OpenAI: ensure billing is set up at platform.openai.com
+- HuggingFace: ensure "Inference Providers" permission on token
 
 ## Development
 
 ```bash
-# Run in development mode with hot reload
-npm run tauri dev
-
-# Run Rust tests
-cd src-tauri && cargo test
-
-# Build for production
-npm run tauri build
+npm run tauri dev           # dev mode with hot reload
+cd src-tauri && cargo test  # run Rust tests
+npm run tauri build         # production build
 ```
-
-## Recommended IDE Setup
-
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
 
 ## License
 
