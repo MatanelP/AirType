@@ -191,7 +191,7 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                         let text_owned = text.to_string();
                         let _ = std::thread::spawn(move || {
                             if let Ok(mut injector) = TextInjector::new() {
-                                let _ = injector.inject_text_with_delay(&text_owned, 10);
+                                let _ = injector.inject_text_clipboard(&text_owned);
                             }
                         });
                     } else if !text.is_empty() {
@@ -294,16 +294,11 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
 
                 if !transcription.is_empty() {
                     log::info!("Injecting text: {}", transcription);
-                    let inject_delay = settings.inject_delay_ms;
                     let inject_result = tokio::task::spawn_blocking(move || {
                         let mut injector =
                             TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
-                        if inject_delay > 0 {
-                            injector.inject_text_with_delay(&transcription, inject_delay)
-                        } else {
-                            injector.inject_text(&transcription)
-                        }
-                        .map_err(|e| format!("Failed to inject text: {}", e))
+                        injector.inject_text_clipboard(&transcription)
+                            .map_err(|e| format!("Failed to inject text: {}", e))
                     })
                     .await
                     .map_err(|e| format!("Injection task failed: {}", e))?;
@@ -360,17 +355,11 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
             if !transcription.is_empty() {
                 log::info!("Injecting text: {}", transcription);
 
-                let inject_delay = settings.inject_delay_ms;
                 let inject_result = tokio::task::spawn_blocking(move || {
                     let mut injector =
                         TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
-
-                    if inject_delay > 0 {
-                        injector.inject_text_with_delay(&transcription, inject_delay)
-                    } else {
-                        injector.inject_text(&transcription)
-                    }
-                    .map_err(|e| format!("Failed to inject text: {}", e))
+                    injector.inject_text_clipboard(&transcription)
+                        .map_err(|e| format!("Failed to inject text: {}", e))
                 })
                 .await
                 .map_err(|e| format!("Injection task failed: {}", e))?;

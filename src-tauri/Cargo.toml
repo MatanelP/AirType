@@ -49,6 +49,9 @@ http = "1"
 # Base64 encoding for audio data
 base64 = "0.22"
 
+# Clipboard access for fast text injection
+arboard = "3"
+
 # Error handling
 anyhow = "1"
 thiserror = "1"

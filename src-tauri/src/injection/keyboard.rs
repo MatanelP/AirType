@@ -8,7 +8,7 @@
 //! be used from a single thread. If you need concurrent access, wrap it in a
 //! Mutex or create separate instances per thread.
 
-use enigo::{Enigo, Keyboard, Settings};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
@@ -114,6 +114,56 @@ impl TextInjector {
         self.enigo
             .text(text)
             .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Injects text via clipboard paste (Ctrl+V / Cmd+V).
+    ///
+    /// Much faster than character-by-character injection and doesn't
+    /// freeze the system. Saves and restores the previous clipboard content.
+    pub fn inject_text_clipboard(&mut self, text: &str) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| InjectionError::InitError(format!("Clipboard: {}", e)))?;
+
+        // Save current clipboard content
+        let prev = clipboard.get_text().ok();
+
+        // Set new text
+        clipboard
+            .set_text(text)
+            .map_err(|e| InjectionError::TypeError(format!("Clipboard set: {}", e)))?;
+
+        // Small delay for clipboard to settle
+        thread::sleep(Duration::from_millis(30));
+
+        // Press Ctrl+V (or Cmd+V on macOS)
+        #[cfg(target_os = "macos")]
+        let modifier = Key::Meta;
+        #[cfg(not(target_os = "macos"))]
+        let modifier = Key::Control;
+
+        self.enigo
+            .key(modifier, Direction::Press)
+            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+        self.enigo
+            .key(Key::Unicode('v'), Direction::Click)
+            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+        self.enigo
+            .key(modifier, Direction::Release)
+            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+
+        // Wait for paste to complete
+        thread::sleep(Duration::from_millis(50));
+
+        // Restore previous clipboard content
+        if let Some(prev_text) = prev {
+            let _ = clipboard.set_text(prev_text);
+        }
 
         Ok(())
     }
