@@ -137,8 +137,15 @@ fn extract_text_from_output(output: &Option<serde_json::Value>) -> Result<String
         .as_ref()
         .ok_or_else(|| "RunPod returned no output".to_string())?;
 
-    // Non-streaming output format: { "result": [[{...segment...}]] }
-    if let Some(result) = output.get("result") {
+    // RunPod wraps non-streaming output in an array: [{"result": [[...segments...]]}]
+    let doc = if let Some(arr) = output.as_array() {
+        arr.first().unwrap_or(output)
+    } else {
+        output
+    };
+
+    // Format: { "result": [[{...segment...}]] }
+    if let Some(result) = doc.get("result") {
         let mut full_text = String::new();
         if let Some(outer_arr) = result.as_array() {
             for inner in outer_arr {
@@ -252,14 +259,27 @@ mod tests {
 
     #[test]
     fn test_extract_text_basic() {
-        let output = serde_json::json!({
+        // RunPod wraps output in an array
+        let output = serde_json::json!([{
             "result": [[
                 {"text": " שלום עולם ", "start": 0.0, "end": 1.0},
                 {"text": " מה שלומך ", "start": 1.0, "end": 2.0}
             ]]
-        });
+        }]);
         let text = extract_text_from_output(&Some(output)).unwrap();
         assert_eq!(text, "שלום עולם מה שלומך");
+    }
+
+    #[test]
+    fn test_extract_text_unwrapped() {
+        // Also handle non-array format
+        let output = serde_json::json!({
+            "result": [[
+                {"text": " טסט ", "start": 0.0, "end": 1.0}
+            ]]
+        });
+        let text = extract_text_from_output(&Some(output)).unwrap();
+        assert_eq!(text, "טסט");
     }
 
     #[test]
