@@ -6,7 +6,7 @@
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 
 const HF_INFERENCE_URL: &str =
-    "https://api-inference.huggingface.co/models/ivrit-ai/whisper-large-v3-turbo";
+    "https://router.huggingface.co/fal-ai/models/ivrit-ai/whisper-large-v3";
 
 /// Transcribe audio using HuggingFace's Inference API with ivrit-ai model.
 ///

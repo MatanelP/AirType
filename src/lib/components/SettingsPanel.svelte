@@ -347,7 +347,7 @@
             <div class="setting-row">
               <div class="setting-info">
                 <span class="setting-label">HuggingFace API Key</span>
-                <span class="setting-desc">For Hebrew transcription (ivrit-ai/whisper-large-v3-turbo)</span>
+                <span class="setting-desc">For Hebrew transcription (ivrit-ai/whisper-large-v3)</span>
               </div>
               <div class="api-key-input">
                 <input 

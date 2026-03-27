@@ -23,7 +23,7 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 | | English (`Ctrl+Shift+E`) | Hebrew (`Ctrl+Shift+H`) |
 |---|---|---|
 | **Service** | OpenAI Realtime API | HuggingFace Inference API |
-| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3-turbo` |
+| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3` |
 | **Mode** | **Live** — text streams as you speak | **Batch** — text after you stop |
 | **Key** | OpenAI (`sk-...`) | HuggingFace (`hf_...`) |
 | **Quality** | ⭐ Great | ⭐ Great |
@@ -139,7 +139,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 - **Frontend**: [Svelte 5](https://svelte.dev/)
 - **Local STT**: [whisper-rs](https://github.com/tazz4843/whisper-rs) (whisper.cpp bindings)
 - **Live STT**: OpenAI Realtime API (WebSocket)
-- **Hebrew STT**: [ivrit-ai/whisper-large-v3-turbo](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo) via HuggingFace
+- **Hebrew STT**: [ivrit-ai/whisper-large-v3](https://huggingface.co/ivrit-ai/whisper-large-v3) via HuggingFace (fal-ai provider)
 - **Audio**: [cpal](https://github.com/RustAudio/cpal)
 - **Text Injection**: [enigo](https://github.com/enigo-rs/enigo)
 
