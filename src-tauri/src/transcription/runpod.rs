@@ -61,14 +61,20 @@ pub async fn transcribe_hebrew(
     audio_samples: &[f32],
 ) -> Result<String, String> {
     let wav_bytes = encode_wav(audio_samples, 16000);
-    let blob = BASE64.encode(&wav_bytes);
+    transcribe_hebrew_wav(api_key, endpoint_id, &wav_bytes).await
+}
 
-    let duration = audio_samples.len() as f64 / 16000.0;
-    log::info!(
-        "Sending {:.1}s of audio to RunPod ivrit-ai endpoint {}...",
-        duration,
-        endpoint_id
-    );
+/// Transcribe Hebrew WAV bytes using ivrit-ai on RunPod Serverless.
+pub async fn transcribe_hebrew_wav(
+    api_key: &str,
+    endpoint_id: &str,
+    wav_bytes: &[u8],
+) -> Result<String, String> {
+    let blob = BASE64.encode(wav_bytes);
+
+    let data_len = wav_bytes.len().saturating_sub(44);
+    let duration = data_len as f64 / 2.0 / 16000.0;
+    log::info!("Sending {:.1}s of audio to RunPod ivrit-ai endpoint {}...", duration, endpoint_id);
 
     let payload = RunPodRequest {
         input: RunPodInput {

@@ -27,7 +27,10 @@ use hotkeys::{
 };
 use injection::TextInjector;
 use settings::{ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
-use transcription::{OpenAIRealtimeTranscriber, WhisperTranscriber, transcribe_hebrew, validate_runpod};
+use transcription::{
+    english_test_wav, hebrew_test_wav, transcribe_english_test, transcribe_hebrew,
+    transcribe_hebrew_wav, validate_runpod, OpenAIRealtimeTranscriber, WhisperTranscriber,
+};
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
@@ -418,6 +421,34 @@ async fn validate_runpod_key(api_key: String, endpoint_id: String) -> Result<boo
     Ok(validate_runpod(&api_key, &endpoint_id).await)
 }
 
+/// Run a bundled transcription test against the configured paid endpoints.
+#[tauri::command]
+async fn run_transcription_test(language: String, state: State<'_, AppState>) -> Result<String, String> {
+    let settings = state.get_settings();
+
+    match language.to_lowercase().as_str() {
+        "en" => {
+            let api_key = settings
+                .openai_api_key
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| "OpenAI API key not set".to_string())?;
+            transcribe_english_test(&api_key, english_test_wav()).await
+        }
+        "he" => {
+            let rp_key = settings
+                .runpod_api_key
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| "RunPod API key not set".to_string())?;
+            let rp_endpoint = settings
+                .runpod_endpoint_id
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| "RunPod Endpoint ID not set".to_string())?;
+            transcribe_hebrew_wav(&rp_key, &rp_endpoint, hebrew_test_wav()).await
+        }
+        other => Err(format!("Unsupported test language: {}", other)),
+    }
+}
+
 /// Set recording mode
 #[tauri::command]
 fn set_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
@@ -707,6 +738,7 @@ pub fn run() {
             download_model,
             validate_openai_key,
             validate_runpod_key,
+            run_transcription_test,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");

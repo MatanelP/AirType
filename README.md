@@ -15,6 +15,7 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 - 🪶 **Lightweight** — Near-zero CPU/RAM when idle
 - 🖥️ **System Tray** — Runs quietly in the background
 - 🚀 **Auto-start** — Can launch on login
+- ✅ **API Test Buttons** — Built-in English/Hebrew sample clips to verify keys and endpoints
 
 ## Transcription Matrix
 
@@ -117,6 +118,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 2. Place your cursor where you want text
 3. Press `Ctrl+Shift+E` (English) or `Ctrl+Shift+H` (Hebrew)
 4. Speak — text is inserted at cursor when done
+5. Use **Test English** / **Test Hebrew** in the main window to verify your API setup
 
 ## Architecture
 
@@ -130,7 +132,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 │  └─ Floating Status Window    │  ├─ Local Whisper (whisper-rs) │
 │                               │  ├─ OpenAI Realtime (WS)      │
 │                               │  ├─ RunPod ivrit-ai API       │
-│                               │  ├─ Text Injector (enigo)      │
+│                               │  ├─ Clipboard Paste (arboard) │
 │                               │  └─ Settings Store (JSON)      │
 ├──────────────────────────────────────────────────────────────┤
 │                       System Tray                              │
@@ -146,7 +148,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
 - **Live STT**: OpenAI Realtime API (WebSocket)
 - **Hebrew STT**: [ivrit-ai/whisper-large-v3-turbo](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo) via [RunPod Serverless](https://github.com/ivrit-ai/runpod-serverless)
 - **Audio**: [cpal](https://github.com/RustAudio/cpal)
-- **Text Injection**: [enigo](https://github.com/enigo-rs/enigo)
+- **Text Injection**: clipboard paste ([arboard](https://github.com/earsn/arboard)) + [enigo](https://github.com/enigo-rs/enigo)
 
 ## Troubleshooting
 

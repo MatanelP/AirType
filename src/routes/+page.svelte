@@ -16,6 +16,10 @@
   let isTranscribing = $state(false);
   let recordingDuration = $state(0);
   let lastTranscription = $state('');
+  let testResult = $state({ language: '', text: '' });
+  let testingLanguage = $state('');
+  /** @type {string | null} */
+  let testError = $state(null);
   let settingsOpen = $state(false);
   /** @type {string | null} */
   let error = $state(null);
@@ -145,6 +149,28 @@
       error = String(err);
     }
   }
+
+  async function runTest(language) {
+    if (testingLanguage || isRecording || isTranscribing) {
+      return;
+    }
+
+    testingLanguage = language;
+    testError = null;
+
+    try {
+      const text = /** @type {string} */ (await invoke('run_transcription_test', { language }));
+      testResult = {
+        language,
+        text
+      };
+      lastTranscription = text;
+    } catch (err) {
+      testError = String(err);
+    } finally {
+      testingLanguage = '';
+    }
+  }
   
   /** @param {Record<string, unknown>} newSettings */
   function handleSettingsSave(newSettings) {
@@ -199,12 +225,58 @@
         Start Recording
       {/if}
     </button>
+
+    <div class="test-actions">
+      <button
+        class="test-btn"
+        onclick={() => runTest('en')}
+        disabled={!!testingLanguage || isRecording || isTranscribing}
+      >
+        {#if testingLanguage === 'en'}
+          Testing English...
+        {:else}
+          Test English
+        {/if}
+      </button>
+      <button
+        class="test-btn"
+        onclick={() => runTest('he')}
+        disabled={!!testingLanguage || isRecording || isTranscribing}
+      >
+        {#if testingLanguage === 'he'}
+          Testing Hebrew...
+        {:else}
+          Test Hebrew
+        {/if}
+      </button>
+    </div>
     
     <!-- Hotkey Hint -->
     <p class="hotkey-hint">
       <kbd>{settings.hotkey_english}</kbd> English · <kbd>{settings.hotkey_hebrew}</kbd> Hebrew
     </p>
   </section>
+
+  {#if testResult.text}
+    <section class="transcription-preview animate-slideUp">
+      <div class="preview-header">
+        <span class="preview-label">
+          {testResult.language === 'en' ? 'English Test Result' : 'Hebrew Test Result'}
+        </span>
+        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(testResult.text)}>
+          Copy
+        </button>
+      </div>
+      <p class="preview-text">{testResult.text}</p>
+    </section>
+  {/if}
+  
+  {#if testError}
+    <div class="error-toast animate-slideUp">
+      <span>{testError}</span>
+      <button class="dismiss-btn" onclick={() => testError = null}>×</button>
+    </div>
+  {/if}
   
   <!-- Transcription Preview -->
   {#if lastTranscription}
@@ -342,6 +414,35 @@
   
   .record-btn:disabled {
     opacity: 0.7;
+  }
+
+  .test-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .test-btn {
+    padding: 0.75rem 1.25rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    color: var(--color-text);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-normal);
+  }
+
+  .test-btn:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+    border-color: var(--color-accent);
+  }
+
+  .test-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
   
   /* Hotkey Hint */
