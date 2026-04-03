@@ -64,6 +64,7 @@ pub struct AudioCapture {
     stream: Mutex<Option<Stream>>,
     is_recording: Arc<AtomicBool>,
     device_sample_rate: u32,
+    device_channels: u16,
     /// Optional sender for streaming audio chunks to an external consumer (e.g. OpenAI)
     stream_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>>,
 }
@@ -100,68 +101,14 @@ impl AudioCapture {
             device_channels
         );
 
-        let buffer = AudioBuffer::with_chunk_size(config.chunk_size);
-        let is_recording = Arc::new(AtomicBool::new(false));
-        let stream_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>> = Arc::new(Mutex::new(None));
-        let resample_state = Arc::new(Mutex::new(ResampleState::new()));
-        let stream = {
-            let buffer = buffer.clone();
-            let is_recording_cb = is_recording.clone();
-            let stream_tx_cb = stream_tx.clone();
-            let resample_state = resample_state.clone();
-            let source_rate = device_sample_rate;
-            let channels = device_channels as usize;
-            let resample_ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
-            let config = StreamConfig {
-                channels: device_channels,
-                sample_rate: SampleRate(device_sample_rate),
-                buffer_size: cpal::BufferSize::Default,
-            };
-
-            device
-                .build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if !is_recording_cb.load(Ordering::SeqCst) {
-                            return;
-                        }
-
-                        let mono_samples: Vec<f32> = if channels > 1 {
-                            data.chunks(channels)
-                                .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-                                .collect()
-                        } else {
-                            data.to_vec()
-                        };
-
-                        let resampled = if source_rate != TARGET_SAMPLE_RATE {
-                            let mut state = resample_state.lock();
-                            resample_linear(&mono_samples, resample_ratio, &mut state)
-                        } else {
-                            mono_samples
-                        };
-
-                        buffer.push_samples(&resampled);
-
-                        if let Some(tx) = stream_tx_cb.lock().as_ref() {
-                            let _ = tx.try_send(resampled);
-                        }
-                    },
-                    move |err| {
-                        log::error!("Audio stream error: {}", err);
-                    },
-                    None,
-                )
-                .map_err(|e| AudioError::StreamBuildError(e.to_string()))?
-        };
-
         Ok(Self {
             device,
-            buffer,
-            stream: Mutex::new(Some(stream)),
-            is_recording,
+            buffer: AudioBuffer::with_chunk_size(config.chunk_size),
+            stream: Mutex::new(None),
+            is_recording: Arc::new(AtomicBool::new(false)),
             device_sample_rate,
-            stream_tx,
+            device_channels,
+            stream_tx: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -174,16 +121,62 @@ impl AudioCapture {
         // Clear any previous samples
         self.buffer.clear();
 
-        let stream_guard = self.stream.lock();
-        let stream = stream_guard
-            .as_ref()
-            .ok_or_else(|| AudioError::StreamStartError("Audio stream not initialized".to_string()))?;
+        let buffer = self.buffer.clone();
+        let is_recording = self.is_recording.clone();
+        let stream_tx = self.stream_tx.clone();
+        let resample_state = Arc::new(Mutex::new(ResampleState::new()));
+        let source_rate = self.device_sample_rate;
+        let channels = self.device_channels as usize;
+        let resample_ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
+        let config = StreamConfig {
+            channels: self.device_channels,
+            sample_rate: SampleRate(self.device_sample_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        let stream = self
+            .device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    if !is_recording.load(Ordering::SeqCst) {
+                        return;
+                    }
+
+                    let mono_samples: Vec<f32> = if channels > 1 {
+                        data.chunks(channels)
+                            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+                            .collect()
+                    } else {
+                        data.to_vec()
+                    };
+
+                    let resampled = if source_rate != TARGET_SAMPLE_RATE {
+                        let mut state = resample_state.lock();
+                        resample_linear(&mono_samples, resample_ratio, &mut state)
+                    } else {
+                        mono_samples
+                    };
+
+                    buffer.push_samples(&resampled);
+
+                    if let Some(tx) = stream_tx.lock().as_ref() {
+                        let _ = tx.try_send(resampled);
+                    }
+                },
+                move |err| {
+                    log::error!("Audio stream error: {}", err);
+                },
+                None,
+            )
+            .map_err(|e| AudioError::StreamBuildError(e.to_string()))?;
 
         stream
             .play()
             .map_err(|e| AudioError::StreamStartError(e.to_string()))?;
 
         self.is_recording.store(true, Ordering::SeqCst);
+        *self.stream.lock() = Some(stream);
 
         log::info!("Recording started");
         Ok(())
@@ -197,8 +190,8 @@ impl AudioCapture {
 
         self.is_recording.store(false, Ordering::SeqCst);
 
-        let stream_guard = self.stream.lock();
-        if let Some(stream) = stream_guard.as_ref() {
+        let stream = self.stream.lock().take();
+        if let Some(stream) = stream {
             stream
                 .pause()
                 .map_err(|e| AudioError::StreamStartError(e.to_string()))?;
