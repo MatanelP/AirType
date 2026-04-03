@@ -26,6 +26,14 @@ impl SettingsStore {
     /// Create a new settings store, loading existing settings or creating defaults.
     pub fn new() -> Result<Self> {
         let config_dir = Self::get_config_dir();
+        let settings_path = Self::get_settings_path();
+        let settings_file_exists = settings_path.exists();
+
+        log::info!(
+            "Settings store init: config_dir={:?}, settings_file_exists={}",
+            config_dir,
+            settings_file_exists
+        );
 
         // Ensure config directory exists
         fs::create_dir_all(&config_dir)
@@ -47,9 +55,11 @@ impl SettingsStore {
             config_dir,
         };
 
-        // Save to ensure the JSON file is scrubbed of secrets and the keychain is populated.
-        if let Err(e) = store.save_internal() {
-            log::warn!("Failed to save initial settings: {}", e);
+        // Create the initial JSON file only on first run.
+        if !settings_file_exists {
+            if let Err(e) = store.save_internal() {
+                log::warn!("Failed to save initial settings: {}", e);
+            }
         }
 
         Ok(store)
@@ -83,6 +93,7 @@ impl SettingsStore {
     /// Load settings from a specific config directory.
     fn load_from_path(config_dir: &PathBuf) -> Result<Settings> {
         let settings_path = config_dir.join(SETTINGS_FILENAME);
+        log::info!("Loading settings from {:?}", settings_path);
 
         let contents = fs::read_to_string(&settings_path)
             .with_context(|| format!("Failed to read settings file: {:?}", settings_path))?;
@@ -97,12 +108,25 @@ impl SettingsStore {
             settings.runpod_api_key = Some(secret);
         }
 
+        log::info!(
+            "Loaded settings secrets: openai_present={}, runpod_present={}",
+            settings.openai_api_key.is_some(),
+            settings.runpod_api_key.is_some()
+        );
+
         Ok(settings)
     }
 
     /// Save the provided settings to disk.
     pub fn save(&self, settings: &Settings) -> Result<()> {
         let settings_path = self.config_dir.join(SETTINGS_FILENAME);
+
+        log::info!(
+            "Saving settings: openai_present={}, runpod_present={}, path={:?}",
+            settings.openai_api_key.is_some(),
+            settings.runpod_api_key.is_some(),
+            settings_path
+        );
 
         Self::persist_secret(OPENAI_API_KEY_ENTRY, settings.openai_api_key.as_deref())?;
         Self::persist_secret(RUNPOD_API_KEY_ENTRY, settings.runpod_api_key.as_deref())?;
@@ -134,6 +158,7 @@ impl SettingsStore {
     }
 
     fn read_secret(name: &str) -> Result<Option<String>> {
+        log::info!("Reading secret {}", name);
         let entry = match Self::secret_entry(name) {
             Ok(entry) => entry,
             Err(e) => {
@@ -142,8 +167,14 @@ impl SettingsStore {
             }
         };
         match entry.get_password() {
-            Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Ok(secret) => {
+                log::info!("Read secret {}: present", name);
+                Ok(Some(secret))
+            }
+            Err(keyring::Error::NoEntry) => {
+                log::info!("Read secret {}: missing", name);
+                Ok(None)
+            }
             Err(e) => {
                 log::warn!("Failed to read secret {}: {}", name, e);
                 Ok(None)
@@ -154,9 +185,13 @@ impl SettingsStore {
     fn persist_secret(name: &str, value: Option<&str>) -> Result<()> {
         let entry = Self::secret_entry(name)?;
         match value {
-            Some(secret) if !secret.is_empty() => entry
-                .set_password(secret)
-                .with_context(|| format!("Failed to store secret: {}", name))?,
+            Some(secret) if !secret.is_empty() => {
+                log::info!("Writing secret {}: present", name);
+                entry
+                    .set_password(secret)
+                    .with_context(|| format!("Failed to store secret: {}", name))?;
+                log::info!("Writing secret {}: done", name);
+            }
             Some(_) => match entry.delete_credential() {
                 Ok(()) => {}
                 Err(keyring::Error::NoEntry) => {}
@@ -164,7 +199,10 @@ impl SettingsStore {
                     return Err(e).with_context(|| format!("Failed to delete secret: {}", name))
                 }
             },
-            None => return Ok(()),
+            None => {
+                log::info!("Writing secret {}: skipped (none)", name);
+                return Ok(());
+            }
         }
         Ok(())
     }

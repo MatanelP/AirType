@@ -35,7 +35,7 @@ use transcription::{
 /// Application state shared across all Tauri commands
 pub struct AppState {
     /// Audio capture instance
-    pub audio: RwLock<Option<AudioCapture>>,
+    pub audio: RwLock<Option<Arc<AudioCapture>>>,
     /// Whisper transcriber (lazy loaded)
     pub transcriber: RwLock<Option<Arc<WhisperTranscriber>>>,
     /// OpenAI Realtime session audio sender (when using OpenAI engine)
@@ -60,8 +60,12 @@ impl AppState {
             log::error!("Failed to create settings store: {}", e);
             panic!("Cannot start without settings store");
         });
+        let audio = AudioCapture::new().ok().map(Arc::new);
+        if audio.is_none() {
+            log::warn!("Audio capture not prewarmed at startup");
+        }
         Self {
-            audio: RwLock::new(None),
+            audio: RwLock::new(audio),
             transcriber: RwLock::new(None),
             openai_audio_tx: RwLock::new(None),
             recording_language: RwLock::new("en".to_string()),
@@ -100,6 +104,18 @@ impl AppState {
     /// Uses the same selected model for all languages
     pub fn get_model_path_for_language(&self, _language: &str) -> Option<PathBuf> {
         self.get_model_path()
+    }
+
+    fn get_audio_capture(&self) -> Result<Arc<AudioCapture>, String> {
+        if let Some(capture) = self.audio.read().as_ref() {
+            return Ok(capture.clone());
+        }
+
+        let capture = AudioCapture::new()
+            .map(Arc::new)
+            .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+        *self.audio.write() = Some(capture.clone());
+        Ok(capture)
     }
 
     /// Ensure transcriber is loaded for a specific language
@@ -167,12 +183,10 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
 
-                let capture = AudioCapture::new()
-                    .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+                let capture = state.get_audio_capture()?;
+                capture.clear_stream_sender();
                 capture.start_recording()
                     .map_err(|e| format!("Failed to start recording: {}", e))?;
-
-                *state.audio.write() = Some(capture);
                 *state.is_recording.write() = true;
 
                 let _ = app.emit("recording-started", ());
@@ -205,14 +219,12 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
 
                 let audio_tx = transcriber.start_session(callback).await?;
 
-                let capture = AudioCapture::new()
-                    .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+                let capture = state.get_audio_capture()?;
                 capture.set_stream_sender(audio_tx.clone());
                 capture.start_recording()
                     .map_err(|e| format!("Failed to start recording: {}", e))?;
 
                 *state.openai_audio_tx.write() = Some(audio_tx);
-                *state.audio.write() = Some(capture);
                 *state.is_recording.write() = true;
 
                 let _ = app.emit("recording-started", ());
@@ -223,12 +235,10 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
             // Local Whisper path (existing behavior)
             state.ensure_transcriber()?;
 
-            let capture = AudioCapture::new()
-                .map_err(|e| format!("Failed to initialize audio: {}", e))?;
+            let capture = state.get_audio_capture()?;
+            capture.clear_stream_sender();
             capture.start_recording()
                 .map_err(|e| format!("Failed to start recording: {}", e))?;
-
-            *state.audio.write() = Some(capture);
             *state.is_recording.write() = true;
 
             let _ = app.emit("recording-started", ());
@@ -252,16 +262,18 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     let settings = state.get_settings();
 
     // Get audio samples and stop capture
-    let samples = {
-        let mut audio_guard = state.audio.write();
-        let capture = audio_guard
-            .take()
-            .ok_or_else(|| "No audio capture instance".to_string())?;
-
-        capture
-            .stop_recording()
-            .map_err(|e| format!("Failed to stop recording: {}", e))?
+    let capture = {
+        state
+            .audio
+            .read()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "No audio capture instance".to_string())?
     };
+
+    let samples = capture
+        .stop_recording()
+        .map_err(|e| format!("Failed to stop recording: {}", e))?;
 
     *state.is_recording.write() = false;
     let _ = app.emit("recording-stopped", ());
@@ -319,6 +331,7 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
             } else {
                 // English: OpenAI Realtime handles transcription via callback
                 state.openai_audio_tx.write().take();
+                capture.clear_stream_sender();
                 log::info!("Recording stopped (OpenAI). Transcription handled via WebSocket callback.");
                 Ok(String::new())
             }
