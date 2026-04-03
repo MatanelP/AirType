@@ -36,6 +36,27 @@ pub async fn transcribe_english_test(api_key: &str, wav_bytes: &[u8]) -> Result<
         .map_err(|e| format!("Failed reading OpenAI response: {}", e))?;
 
     if !status.is_success() {
+        if let Ok(json) = serde_json::from_str::<Value>(&body) {
+            let error = json.get("error");
+            let code = error
+                .and_then(|e| e.get("code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message = error
+                .and_then(|e| e.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(body.trim());
+
+            if status.as_u16() == 429 || code == "insufficient_quota" {
+                return Err(format!(
+                    "OpenAI test needs billing or credits: {}",
+                    message
+                ));
+            }
+
+            return Err(format!("OpenAI API error ({}): {}", status, message));
+        }
+
         return Err(format!("OpenAI API error ({}): {}", status, body));
     }
 

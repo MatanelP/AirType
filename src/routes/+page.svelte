@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { dev } from '$app/environment';
   import '../app.css';
   
   import StatusIndicator from '$lib/components/StatusIndicator.svelte';
@@ -46,6 +47,7 @@
   // Derived values
   let languageLabel = $derived(settings.language === 'en' ? 'EN' : 'HE');
   let modeLabel = $derived(settings.live_transcription ? 'Live' : 'Batch');
+  let showTestButtons = $derived(dev);
   
   // Load settings on mount
   onMount(() => {
@@ -226,30 +228,32 @@
       {/if}
     </button>
 
-    <div class="test-actions">
-      <button
-        class="test-btn"
-        onclick={() => runTest('en')}
-        disabled={!!testingLanguage || isRecording || isTranscribing}
-      >
-        {#if testingLanguage === 'en'}
-          Testing English...
-        {:else}
-          Test English
-        {/if}
-      </button>
-      <button
-        class="test-btn"
-        onclick={() => runTest('he')}
-        disabled={!!testingLanguage || isRecording || isTranscribing}
-      >
-        {#if testingLanguage === 'he'}
-          Testing Hebrew...
-        {:else}
-          Test Hebrew
-        {/if}
-      </button>
-    </div>
+    {#if showTestButtons}
+      <div class="test-actions">
+        <button
+          class="test-btn"
+          onclick={() => runTest('en')}
+          disabled={!!testingLanguage || isRecording || isTranscribing}
+        >
+          {#if testingLanguage === 'en'}
+            Testing English...
+          {:else}
+            Test English
+          {/if}
+        </button>
+        <button
+          class="test-btn"
+          onclick={() => runTest('he')}
+          disabled={!!testingLanguage || isRecording || isTranscribing}
+        >
+          {#if testingLanguage === 'he'}
+            Testing Hebrew...
+          {:else}
+            Test Hebrew
+          {/if}
+        </button>
+      </div>
+    {/if}
     
     <!-- Hotkey Hint -->
     <p class="hotkey-hint">
