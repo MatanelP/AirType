@@ -28,6 +28,7 @@
 
   $effect(() => {
     if (isOpen) {
+      refreshSettings();
       loadModelStatus();
     }
   });
@@ -56,6 +57,16 @@
       modelStatus = await invoke('get_model_status');
     } catch (e) {
       console.error('Failed to load model status:', e);
+    }
+  }
+
+  async function refreshSettings() {
+    try {
+      const loadedSettings = await invoke('get_settings');
+      localSettings = { ...settings, ...loadedSettings };
+      onSettingsChange(localSettings);
+    } catch (e) {
+      console.error('Failed to refresh settings:', e);
     }
   }
 

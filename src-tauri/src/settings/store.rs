@@ -2,14 +2,18 @@
 
 use super::Settings;
 use anyhow::{Context, Result};
+use keyring::Entry;
 use parking_lot::RwLock;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 const APP_NAME: &str = "airtype";
+const SECRET_SERVICE_NAME: &str = "airtype";
 const SETTINGS_FILENAME: &str = "settings.json";
 const MODELS_DIR_NAME: &str = "models";
+const OPENAI_API_KEY_ENTRY: &str = "openai_api_key";
+const RUNPOD_API_KEY_ENTRY: &str = "runpod_api_key";
 
 /// Thread-safe settings store with automatic persistence.
 #[derive(Debug, Clone)]
@@ -43,7 +47,7 @@ impl SettingsStore {
             config_dir,
         };
 
-        // Save to ensure file exists with current defaults
+        // Save to ensure the JSON file is scrubbed of secrets and the keychain is populated.
         if let Err(e) = store.save_internal() {
             log::warn!("Failed to save initial settings: {}", e);
         }
@@ -83,8 +87,15 @@ impl SettingsStore {
         let contents = fs::read_to_string(&settings_path)
             .with_context(|| format!("Failed to read settings file: {:?}", settings_path))?;
 
-        let settings: Settings =
+        let mut settings: Settings =
             serde_json::from_str(&contents).with_context(|| "Failed to parse settings JSON")?;
+
+        if let Some(secret) = Self::read_secret(OPENAI_API_KEY_ENTRY)? {
+            settings.openai_api_key = Some(secret);
+        }
+        if let Some(secret) = Self::read_secret(RUNPOD_API_KEY_ENTRY)? {
+            settings.runpod_api_key = Some(secret);
+        }
 
         Ok(settings)
     }
@@ -93,7 +104,14 @@ impl SettingsStore {
     pub fn save(&self, settings: &Settings) -> Result<()> {
         let settings_path = self.config_dir.join(SETTINGS_FILENAME);
 
-        let json = serde_json::to_string_pretty(settings)
+        Self::persist_secret(OPENAI_API_KEY_ENTRY, settings.openai_api_key.as_deref())?;
+        Self::persist_secret(RUNPOD_API_KEY_ENTRY, settings.runpod_api_key.as_deref())?;
+
+        let mut disk_settings = settings.clone();
+        disk_settings.openai_api_key = None;
+        disk_settings.runpod_api_key = None;
+
+        let json = serde_json::to_string_pretty(&disk_settings)
             .with_context(|| "Failed to serialize settings")?;
 
         fs::write(&settings_path, &json)
@@ -107,6 +125,47 @@ impl SettingsStore {
             let _ = fs::set_permissions(&settings_path, perms);
         }
 
+        Ok(())
+    }
+
+    fn secret_entry(name: &str) -> Result<Entry> {
+        Entry::new(SECRET_SERVICE_NAME, name)
+            .with_context(|| format!("Failed to initialize secret entry: {}", name))
+    }
+
+    fn read_secret(name: &str) -> Result<Option<String>> {
+        let entry = match Self::secret_entry(name) {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Failed to initialize secret entry {}: {}", name, e);
+                return Ok(None);
+            }
+        };
+        match entry.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => {
+                log::warn!("Failed to read secret {}: {}", name, e);
+                Ok(None)
+            }
+        }
+    }
+
+    fn persist_secret(name: &str, value: Option<&str>) -> Result<()> {
+        let entry = Self::secret_entry(name)?;
+        match value {
+            Some(secret) if !secret.is_empty() => entry
+                .set_password(secret)
+                .with_context(|| format!("Failed to store secret: {}", name))?,
+            Some(_) => match entry.delete_credential() {
+                Ok(()) => {}
+                Err(keyring::Error::NoEntry) => {}
+                Err(e) => {
+                    return Err(e).with_context(|| format!("Failed to delete secret: {}", name))
+                }
+            },
+            None => return Ok(()),
+        }
         Ok(())
     }
 
@@ -249,5 +308,20 @@ mod tests {
         assert!(json.contains("start_minimized"));
         assert!(json.contains("start_on_login"));
         assert!(json.contains("inject_delay_ms"));
+    }
+
+    #[test]
+    fn test_sensitive_settings_not_serialized() {
+        let settings = Settings {
+            openai_api_key: Some("openai-secret".to_string()),
+            runpod_api_key: Some("runpod-secret".to_string()),
+            ..Settings::default()
+        };
+
+        let json = serde_json::to_string_pretty(&settings).unwrap();
+        assert!(json.contains("openai-secret"));
+        assert!(json.contains("runpod-secret"));
+        assert!(json.contains("openai_api_key"));
+        assert!(json.contains("runpod_api_key"));
     }
 }

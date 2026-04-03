@@ -16,7 +16,7 @@ AirType is a lightweight, cross-platform desktop application that transcribes yo
 - 🖥️ **System Tray** — Runs quietly in the background
 - 🚀 **Auto-start** — Can launch on login
 - ✅ **API Test Buttons** — Built-in English/Hebrew sample clips to verify keys and endpoints
-
+- 🔐 **Secure Secrets** — API keys are stored in the OS keychain
 ## Transcription Matrix
 
 ### Engine: **Paid (API keys required)**
@@ -111,6 +111,7 @@ No setup needed — a Whisper model will be downloaded automatically on first us
    - Copy your API Key from [Settings → API Keys](https://www.runpod.io/console/user/settings)
    - Copy the Endpoint ID from your deployed endpoint
 3. Open AirType Settings → select "OpenAI (paid, live)" → paste all keys
+   - API keys are saved to the OS keychain; the config file only keeps non-secret settings
 
 ## Usage
 

@@ -50,7 +50,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.5rem;
+    gap: 0.9rem;
     width: 100%;
   }
   
@@ -158,14 +158,14 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
-    min-height: 4.5rem;
+    gap: 0.1rem;
+    min-height: 2.8rem;
     justify-content: center;
     width: 100%;
   }
   
   .status-text {
-    font-size: 1.25rem;
+    font-size: 1.05rem;
     font-weight: 500;
     color: var(--color-text);
     text-transform: uppercase;
@@ -182,7 +182,7 @@
   }
   
   .duration {
-    font-size: 2rem;
+    font-size: 1.35rem;
     font-weight: 300;
     font-family: 'JetBrains Mono', monospace;
     color: var(--color-text-muted);

@@ -163,6 +163,7 @@
     }
   }
 
+  /** @param {'en' | 'he'} language */
   async function runTest(language) {
     if (testingLanguage || isRecording || isTranscribing) {
       return;
@@ -371,7 +372,7 @@
     align-items: center;
     justify-content: center;
     padding: 2rem;
-    gap: 2rem;
+    gap: 1.25rem;
   }
   
   /* Mode Badges */
