@@ -51,6 +51,7 @@
     flex-direction: column;
     align-items: center;
     gap: 1.5rem;
+    width: 100%;
   }
   
   .orb-container {
@@ -158,6 +159,9 @@
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
+    min-height: 4.5rem;
+    justify-content: center;
+    width: 100%;
   }
   
   .status-text {
@@ -166,6 +170,7 @@
     color: var(--color-text);
     text-transform: uppercase;
     letter-spacing: 0.1em;
+    text-align: center;
   }
   
   .recording .status-text {
@@ -181,5 +186,6 @@
     font-weight: 300;
     font-family: 'JetBrains Mono', monospace;
     color: var(--color-text-muted);
+    text-align: center;
   }
 </style>

@@ -43,6 +43,8 @@
   // Duration timer
   /** @type {ReturnType<typeof setInterval> | null} */
   let durationInterval = $state(null);
+  /** @type {number | null} */
+  let recordingStartedAt = $state(null);
   
   // Derived values
   let languageLabel = $derived(settings.language === 'en' ? 'EN' : 'HE');
@@ -127,17 +129,26 @@
   });
   
   function startDurationTimer() {
+    if (durationInterval) return;
+
+    recordingStartedAt = Date.now();
     recordingDuration = 0;
     durationInterval = setInterval(() => {
-      recordingDuration++;
-    }, 1000);
+      if (!recordingStartedAt) {
+        recordingDuration = 0;
+        return;
+      }
+      recordingDuration = Math.floor((Date.now() - recordingStartedAt) / 1000);
+    }, 200);
   }
-  
+
   function stopDurationTimer() {
     if (durationInterval) {
       clearInterval(durationInterval);
       durationInterval = null;
     }
+    recordingStartedAt = null;
+    recordingDuration = 0;
   }
   
   async function toggleRecording() {
@@ -471,7 +482,7 @@
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 1rem 1.5rem;
+    padding: 0.5rem 1rem;
     background: var(--color-surface);
     border-top: 1px solid var(--color-border);
   }
@@ -480,7 +491,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
   }
   
   .preview-label {
@@ -508,10 +519,12 @@
   }
   
   .preview-text {
-    font-size: 0.9375rem;
+    font-size: 0.875rem;
     color: var(--color-text);
-    line-height: 1.5;
-    max-height: 4.5rem;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow-y: auto;
   }
   

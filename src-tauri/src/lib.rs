@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Listener, Manager, State, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Listener, Manager, State,
 };
 
 pub mod audio;
