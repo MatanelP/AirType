@@ -56,7 +56,27 @@ AirType is a lightweight desktop app that transcribes your voice and inserts the
 
 ## Installation
 
-### Prerequisites
+### Download prebuilt binary
+
+Grab the latest release for your OS from the [Releases page](https://github.com/MatanelP/AirType/releases/latest).
+
+- **Linux** — `AirType_*.AppImage` (chmod +x and run), `.deb`, or `.rpm`
+- **Windows** — `AirType_*_x64-setup.exe` or `.msi`
+- **macOS (Apple Silicon)** — `AirType_*_aarch64.dmg`
+
+#### macOS: bypass the "app is damaged" warning
+
+The macOS build is ad-hoc signed but not notarized (Apple's notary service requires a paid Developer account). After dragging AirType to Applications, run this one-liner in Terminal to remove the quarantine attribute:
+
+```bash
+xattr -cr /Applications/AirType.app
+```
+
+Then launch normally. You only need to do this once.
+
+### Build from source
+
+#### Prerequisites
 
 **Linux (Ubuntu/Debian)**
 ```bash
@@ -75,7 +95,7 @@ xcode-select --install
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 - [CMake](https://cmake.org/download/)
 
-### Build from source
+#### Build
 
 ```bash
 git clone https://github.com/MatanelP/AirType.git
