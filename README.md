@@ -56,23 +56,39 @@ AirType is a lightweight desktop app that transcribes your voice and inserts the
 
 ## Installation
 
-### Download prebuilt binary
+### Quick install (recommended)
 
-Grab the latest release for your OS from the [Releases page](https://github.com/MatanelP/AirType/releases/latest).
+**Linux / macOS**
+```bash
+curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.sh | sh
+```
 
-- **Linux** — `AirType_*.AppImage` (chmod +x and run), `.deb`, or `.rpm`
-- **Windows** — `AirType_*_x64-setup.exe` or `.msi`
-- **macOS (Apple Silicon)** — `AirType_*_aarch64.dmg`
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.ps1 | iex
+```
+
+The script auto-detects your OS and architecture, downloads the correct release asset, installs it (using `apt`/`dnf` on Linux, `/Applications` on macOS, MSI on Windows), and on macOS strips the quarantine attribute so the ad-hoc signed bundle launches without Gatekeeper blocking it.
+
+Pin a specific version by exporting `AIRTYPE_VERSION=v1.0.1` before running.
+
+### Manual download
+
+Grab the asset for your OS from the [Releases page](https://github.com/MatanelP/AirType/releases/latest):
+
+- **Linux** — `.AppImage` (chmod +x and run), `.deb`, or `.rpm`
+- **Windows** — `_x64-setup.exe` (NSIS) or `_x64_en-US.msi`
+- **macOS (Apple Silicon)** — `_aarch64.dmg`
 
 #### macOS: bypass the "app is damaged" warning
 
-The macOS build is ad-hoc signed but not notarized (Apple's notary service requires a paid Developer account). After dragging AirType to Applications, run this one-liner in Terminal to remove the quarantine attribute:
+The macOS build is ad-hoc signed but not notarized (Apple's notary service requires a paid Developer account). After dragging AirType to Applications, run this one-liner to remove the quarantine attribute:
 
 ```bash
 xattr -cr /Applications/AirType.app
 ```
 
-Then launch normally. You only need to do this once.
+Then launch normally. You only need to do this once. The quick-install script does this for you automatically.
 
 ### Build from source
 
