@@ -176,6 +176,13 @@ graph TB
 **Linux: Hotkeys not responding**
 Wayland has limited global hotkey support. Run under X11 or XWayland.
 
+**macOS: "AirType is damaged and can't be opened"**
+The release builds are ad-hoc signed but not notarized. macOS may still block them after download. Clear the quarantine attribute:
+```bash
+xattr -cr /Applications/AirType.app
+```
+Then right-click the app and choose *Open*.
+
 **macOS: Permission errors**
 Go to System Settings → Privacy & Security and enable AirType under *Accessibility*, *Input Monitoring*, and *Microphone*.
 
