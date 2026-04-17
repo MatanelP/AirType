@@ -26,6 +26,8 @@ jobs:
             patchelf \
             libasound2-dev \
             libssl-dev \
+            libxdo-dev \
+            libdbus-1-dev \
             pkg-config \
             build-essential \
             cmake
@@ -86,12 +88,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Disable native CPU detection for whisper.cpp
+        run: echo 'set(GGML_NATIVE OFF CACHE BOOL "" FORCE)' > $RUNNER_TEMP/no-native.cmake
+
       - name: Build Tauri app
         run: npx tauri build -- --target aarch64-apple-darwin
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
-          CFLAGS: '-mcpu=apple-m1'
-          CXXFLAGS: '-mcpu=apple-m1'
+          CMAKE_TOOLCHAIN_FILE: ${{ runner.temp }}/no-native.cmake
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
