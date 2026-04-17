@@ -2,6 +2,7 @@
   // @ts-nocheck
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
+  import { getVersion } from '@tauri-apps/api/app';
   import { onMount } from 'svelte';
 
   let { 
@@ -20,6 +21,7 @@
   let downloadProgress = $state(0);
   let showApiKey = $state(false);
   let keyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
+  let appVersion = $state('');
 
   // Sync localSettings when settings prop changes
   $effect(() => {
@@ -35,6 +37,8 @@
 
   onMount(() => {
     let unlisteners = [];
+
+    getVersion().then((v) => { appVersion = v; }).catch(() => {});
     
     (async () => {
       unlisteners.push(await listen('model-download-progress', (event) => {
@@ -515,6 +519,13 @@
             </label>
           </div>
         </section>
+
+        <div class="settings-version" aria-label="App version">
+          {#if appVersion}
+            <span>AirType</span>
+            <span class="version-tag">v{appVersion}</span>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -596,6 +607,24 @@
   
   .settings-section {
     margin-bottom: 1.75rem;
+  }
+
+  .settings-version {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.75rem 0 1rem;
+    font-size: 0.6875rem;
+    color: var(--color-text-muted, #8888a0);
+    opacity: 0.55;
+    user-select: text;
+    letter-spacing: 0.02em;
+  }
+
+  .settings-version .version-tag {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
   }
   
   .settings-section h3 {
