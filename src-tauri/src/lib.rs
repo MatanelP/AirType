@@ -162,40 +162,52 @@ impl AppState {
 /// Start recording audio
 #[tauri::command]
 async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    log::info!("Starting recording...");
-
-    // Check if already recording
-    if *state.is_recording.read() {
-        return Err("Already recording".to_string());
-    }
+    log::info!("Starting recording (post-capture setup)...");
 
     let settings = state.get_settings();
     let language = state.recording_language.read().clone();
+
+    // Ensure capture is active. When triggered from a hotkey, capture has
+    // already been started synchronously in the hotkey callback so that the
+    // microphone begins collecting samples with sub-perceptual latency.
+    // When triggered from the UI, start it here.
+    let capture = state.get_audio_capture()?;
+    if !capture.is_recording() {
+        capture.clear_stream_sender();
+        capture
+            .start_recording()
+            .map_err(|e| format!("Failed to start recording: {}", e))?;
+        let _ = app.emit("recording-started", ());
+    }
+    *state.is_recording.write() = true;
 
     match settings.transcription_engine {
         TranscriptionEngine::OpenAI => {
             if language == "he" {
                 // Hebrew: just capture audio, will use RunPod ivrit-ai batch API on stop
-                let _rp_key = settings.runpod_api_key
+                let _rp_key = settings
+                    .runpod_api_key
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod API key not set. Go to Settings to add it.".to_string())?;
-                let _rp_endpoint = settings.runpod_endpoint_id
+                    .ok_or_else(|| {
+                        "RunPod API key not set. Go to Settings to add it.".to_string()
+                    })?;
+                let _rp_endpoint = settings
+                    .runpod_endpoint_id
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
+                    .ok_or_else(|| {
+                        "RunPod Endpoint ID not set. Go to Settings to add it.".to_string()
+                    })?;
 
-                let capture = state.get_audio_capture()?;
-                capture.clear_stream_sender();
-                capture.start_recording()
-                    .map_err(|e| format!("Failed to start recording: {}", e))?;
-                *state.is_recording.write() = true;
-
-                let _ = app.emit("recording-started", ());
-                log::info!("Recording started (RunPod ivrit-ai for Hebrew)");
+                log::info!("Recording in progress (RunPod ivrit-ai for Hebrew)");
             } else {
                 // English: OpenAI Realtime API for live streaming
-                let api_key = settings.openai_api_key
+                let api_key = settings
+                    .openai_api_key
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "OpenAI API key not set. Go to Settings → Transcription Engine.".to_string())?;
+                    .ok_or_else(|| {
+                        "OpenAI API key not set. Go to Settings → Transcription Engine."
+                            .to_string()
+                    })?;
 
                 let transcriber = OpenAIRealtimeTranscriber::new(&api_key);
                 transcriber.set_language(&language);
@@ -219,30 +231,20 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
 
                 let audio_tx = transcriber.start_session(callback).await?;
 
-                let capture = state.get_audio_capture()?;
-                capture.set_stream_sender(audio_tx.clone());
-                capture.start_recording()
-                    .map_err(|e| format!("Failed to start recording: {}", e))?;
+                // Forward any samples already captured while the WebSocket was
+                // being established, then stream subsequent samples live.
+                capture.set_stream_sender_with_flush(audio_tx.clone());
 
                 *state.openai_audio_tx.write() = Some(audio_tx);
-                *state.is_recording.write() = true;
 
-                let _ = app.emit("recording-started", ());
-                log::info!("Recording started (OpenAI Realtime)");
+                log::info!("Recording in progress (OpenAI Realtime)");
             }
         }
         TranscriptionEngine::LocalWhisper => {
-            // Local Whisper path (existing behavior)
+            // Local Whisper path: transcriber is pre-loaded in the hotkey
+            // handler. Re-check here in case this command came from the UI.
             state.ensure_transcriber()?;
-
-            let capture = state.get_audio_capture()?;
-            capture.clear_stream_sender();
-            capture.start_recording()
-                .map_err(|e| format!("Failed to start recording: {}", e))?;
-            *state.is_recording.write() = true;
-
-            let _ = app.emit("recording-started", ());
-            log::info!("Recording started (Local Whisper)");
+            log::info!("Recording in progress (Local Whisper)");
         }
     }
 
@@ -602,6 +604,40 @@ async fn download_model(app: AppHandle, size: String) -> Result<String, String> 
 // Indicator Window Helpers - Run on main thread to avoid X11 crashes
 // ============================================================================
 
+/// Start microphone capture synchronously on the hotkey callback thread so the
+/// OS starts collecting audio with minimal latency after the keypress. All
+/// transcription/session setup happens afterwards; any samples captured in the
+/// meantime are buffered and forwarded once the session is ready.
+fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
+    let state = app.state::<AppState>();
+    if *state.is_recording.read() {
+        return;
+    }
+    *state.recording_language.write() = language.to_string();
+
+    let capture = match state.get_audio_capture() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("prewarm_capture: no audio device: {}", e);
+            return;
+        }
+    };
+    if capture.is_recording() {
+        return;
+    }
+    capture.clear_stream_sender();
+    match capture.start_recording() {
+        Ok(_) => {
+            *state.is_recording.write() = true;
+            let _ = app.emit("recording-started", ());
+            log::info!("Mic capture pre-warmed (language={})", language);
+        }
+        Err(e) => {
+            log::error!("prewarm_capture: failed to start mic: {}", e);
+        }
+    }
+}
+
 /// Show the floating indicator window at bottom center of screen
 fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     log::info!("Showing indicator for language: {}", language);
@@ -622,9 +658,9 @@ fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
                 let logical_w = size.width as f64 / scale;
                 let logical_h = size.height as f64 / scale;
                 
-                // Window is 140x36
-                let x = (logical_w - 140.0) / 2.0;
-                let y = logical_h - 36.0 - 60.0;
+                // Window is 160x48 (includes padding for the shadow + pill)
+                let x = (logical_w - 160.0) / 2.0;
+                let y = logical_h - 48.0 - 60.0;
                 
                 log::info!("Indicator position: ({}, {})", x, y);
                 let _ = indicator.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
@@ -807,6 +843,14 @@ pub fn run() {
                     let mode = hotkey_mode;
                     keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
                         log::info!("English modifier callback: pressed={}", pressed);
+                        if pressed {
+                            // Start the microphone synchronously on the listener
+                            // thread so that audio capture begins within
+                            // milliseconds of the physical keypress. Any
+                            // buffered samples will be forwarded to the
+                            // transcription session once it is set up.
+                            prewarm_capture(&app_clone, "en");
+                        }
                         let event = if pressed {
                             HotkeyEvent::RecordingStart { language: "en".to_string() }
                         } else if mode == settings::HotkeyMode::Hold {
@@ -826,6 +870,9 @@ pub fn run() {
                     let mode = hotkey_mode;
                     keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
                         log::info!("Hebrew modifier callback: pressed={}", pressed);
+                        if pressed {
+                            prewarm_capture(&app_clone, "he");
+                        }
                         let event = if pressed {
                             HotkeyEvent::RecordingStart { language: "he".to_string() }
                         } else if mode == settings::HotkeyMode::Hold {
@@ -857,14 +904,44 @@ pub fn run() {
                                 log::info!("Hotkey: Start recording in {}", language);
                                 let state = app.state::<AppState>();
                                 if !*state.is_recording.read() {
-                                    // Show indicator window
-                                    show_indicator(&app, &language);
-                                    
                                     // Store current recording language
                                     *state.recording_language.write() = language.clone();
-                                    
+
+                                    // Start the microphone *immediately* so the
+                                    // OS begins capturing audio within a few ms
+                                    // of the hotkey press. The transcriber /
+                                    // network session is set up afterwards; any
+                                    // audio captured in the meantime is
+                                    // buffered and flushed to the session once
+                                    // it is ready.
+                                    match state.get_audio_capture() {
+                                        Ok(capture) => {
+                                            if !capture.is_recording() {
+                                                capture.clear_stream_sender();
+                                                if let Err(e) = capture.start_recording() {
+                                                    log::error!(
+                                                        "Failed to start mic capture: {}",
+                                                        e
+                                                    );
+                                                    let _ = app.emit("error", e.to_string());
+                                                    return;
+                                                }
+                                                *state.is_recording.write() = true;
+                                                let _ = app.emit("recording-started", ());
+                                            }
+                                        }
+                                        Err(e) => {
+                                            log::error!("No audio capture: {}", e);
+                                            let _ = app.emit("error", e);
+                                            return;
+                                        }
+                                    }
+
+                                    // Show indicator after mic is live
+                                    show_indicator(&app, &language);
+
                                     let settings = state.get_settings();
-                                    
+
                                     // For local whisper, load the correct model for the language
                                     if settings.transcription_engine == TranscriptionEngine::LocalWhisper {
                                         if let Err(e) = state.ensure_transcriber_for_language(&language) {
@@ -874,9 +951,9 @@ pub fn run() {
                                             return;
                                         }
                                     }
-                                    
+
                                     let _ = app.emit("language-changed", &language);
-                                    
+
                                     tauri::async_runtime::spawn(async move {
                                         let state = app.state::<AppState>();
                                         if let Err(e) = start_recording(state, app.clone()).await {

@@ -213,6 +213,24 @@ impl AudioCapture {
         *self.stream_tx.lock() = Some(tx);
     }
 
+    /// Set the stream sender and immediately forward any samples that were
+    /// buffered before the sender was attached. Used when audio capture is
+    /// started synchronously on hotkey press, while the network session that
+    /// consumes the stream is still being initialized.
+    pub fn set_stream_sender_with_flush(&self, tx: mpsc::Sender<Vec<f32>>) {
+        let mut guard = self.stream_tx.lock();
+        let buffered = self.buffer.get_samples();
+        if !buffered.is_empty() {
+            log::info!(
+                "Flushing {} pre-buffered samples ({:.2}s) to stream consumer",
+                buffered.len(),
+                buffered.len() as f32 / TARGET_SAMPLE_RATE as f32
+            );
+            let _ = tx.try_send(buffered);
+        }
+        *guard = Some(tx);
+    }
+
     /// Clear the external streaming sender.
     pub fn clear_stream_sender(&self) {
         *self.stream_tx.lock() = None;

@@ -45,11 +45,13 @@
   );
 </script>
 
-<div class="indicator" style="background: {gradient};">
-  <span class="icon" class:pulse={state === 'recording'} class:spin={state === 'transcribing'}>
-    {icon}
-  </span>
-  <span class="label">{label}</span>
+<div class="wrap">
+  <div class="indicator" style="background: {gradient};">
+    <span class="icon" class:pulse={state === 'recording'} class:spin={state === 'transcribing'}>
+      {icon}
+    </span>
+    <span class="label">{label}</span>
+  </div>
 </div>
 
 <style>
@@ -59,10 +61,22 @@
     width: 100%; height: 100%;
     background: transparent;
   }
-  
+
+  /* Wrapper fills the window; the pill inside has margin so the rounded
+     edges and the box-shadow are never clipped by the window bounds. */
+  .wrap {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+    background: transparent;
+  }
+
   .indicator {
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;

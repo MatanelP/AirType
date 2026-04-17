@@ -122,50 +122,136 @@ impl TextInjector {
     ///
     /// Much faster than character-by-character injection and doesn't
     /// freeze the system. Saves and restores the previous clipboard content.
+    ///
+    /// On Linux (X11/Wayland), the clipboard data is served by the owning
+    /// process on-demand. If the `Clipboard` handle is dropped immediately
+    /// after `set_text`, the target application never receives the paste
+    /// payload (arboard logs: "Clipboard was dropped very quickly after
+    /// writing"). To avoid this, we keep the Clipboard alive in a dedicated
+    /// worker thread via `SetExtLinux::wait_until` for up to 2 seconds, which
+    /// is more than enough for the target app to complete the paste.
     pub fn inject_text_clipboard(&mut self, text: &str) -> Result<()> {
         if text.is_empty() {
             return Ok(());
         }
 
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| InjectionError::InitError(format!("Clipboard: {}", e)))?;
+        #[cfg(target_os = "linux")]
+        {
+            use arboard::SetExtLinux;
+            use std::sync::mpsc;
+            use std::time::Instant;
 
-        // Save current clipboard content
-        let prev = clipboard.get_text().ok();
+            let text_owned = text.to_string();
+            let text_for_hold = text_owned.clone();
 
-        // Set new text
-        clipboard
-            .set_text(text)
-            .map_err(|e| InjectionError::TypeError(format!("Clipboard set: {}", e)))?;
+            // Synchronously signal when the clipboard has actually been
+            // populated so the main thread only presses Ctrl+V AFTER the
+            // target app can read our text. Clipboard::new() + get_text()
+            // on X11 can take well over the previous 40 ms heuristic, so a
+            // fixed sleep is unreliable.
+            let (ready_tx, ready_rx) = mpsc::sync_channel::<bool>(1);
 
-        // Small delay for clipboard to settle
-        thread::sleep(Duration::from_millis(30));
+            thread::spawn(move || {
+                let mut clipboard = match arboard::Clipboard::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Clipboard worker: failed to open: {}", e);
+                        let _ = ready_tx.send(false);
+                        return;
+                    }
+                };
+                let prev = clipboard.get_text().ok();
+                // Take X11 selection ownership immediately. The Clipboard
+                // instance stays alive for the rest of this closure, so
+                // arboard's background server thread keeps serving selection
+                // requests from other apps during the paste.
+                if let Err(e) = clipboard.set_text(text_owned) {
+                    log::error!("Clipboard worker: set_text failed: {}", e);
+                    let _ = ready_tx.send(false);
+                    return;
+                }
+                // Signal the main thread that the clipboard now contains our
+                // text and is ready to be pasted.
+                let _ = ready_tx.send(true);
 
-        // Press Ctrl+V (or Cmd+V on macOS)
-        #[cfg(target_os = "macos")]
-        let modifier = Key::Meta;
-        #[cfg(not(target_os = "macos"))]
-        let modifier = Key::Control;
+                // Keep the clipboard alive for up to 2 s to serve paste
+                // requests. wait_until blocks this thread but leaves the
+                // server thread free to answer X11 SelectionRequest events.
+                let _ = clipboard
+                    .set()
+                    .wait_until(Instant::now() + Duration::from_millis(2000))
+                    .text(text_for_hold);
 
-        self.enigo
-            .key(modifier, Direction::Press)
-            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
-        self.enigo
-            .key(Key::Unicode('v'), Direction::Click)
-            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
-        self.enigo
-            .key(modifier, Direction::Release)
-            .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+                // Restore the previous clipboard contents and hold them
+                // briefly so clipboard managers (gpaste/klipper/etc.) and
+                // any other apps that request the selection actually
+                // receive the restored data. Without this hold arboard
+                // logs: "Clipboard was dropped very quickly after writing".
+                if let Some(p) = prev {
+                    let _ = clipboard
+                        .set()
+                        .wait_until(Instant::now() + Duration::from_millis(500))
+                        .text(p);
+                }
+            });
 
-        // Wait for paste to complete
-        thread::sleep(Duration::from_millis(50));
+            // Wait up to 500 ms for the worker to actually own the selection
+            // before pressing Ctrl+V. If the worker failed or timed out we
+            // still attempt the paste as a best effort.
+            let _ = ready_rx.recv_timeout(Duration::from_millis(500));
 
-        // Restore previous clipboard content
-        if let Some(prev_text) = prev {
-            let _ = clipboard.set_text(prev_text);
+            self.enigo
+                .key(Key::Control, Direction::Press)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            self.enigo
+                .key(Key::Unicode('v'), Direction::Click)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            self.enigo
+                .key(Key::Control, Direction::Release)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+
+            // Wait for paste to complete before returning so callers that
+            // trigger follow-up actions don't race the paste.
+            thread::sleep(Duration::from_millis(80));
+            return Ok(());
         }
 
-        Ok(())
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut clipboard = arboard::Clipboard::new()
+                .map_err(|e| InjectionError::InitError(format!("Clipboard: {}", e)))?;
+
+            let prev = clipboard.get_text().ok();
+
+            clipboard
+                .set_text(text)
+                .map_err(|e| InjectionError::TypeError(format!("Clipboard set: {}", e)))?;
+
+            thread::sleep(Duration::from_millis(30));
+
+            #[cfg(target_os = "macos")]
+            let modifier = Key::Meta;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = Key::Control;
+
+            self.enigo
+                .key(modifier, Direction::Press)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            self.enigo
+                .key(Key::Unicode('v'), Direction::Click)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            self.enigo
+                .key(modifier, Direction::Release)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+
+            thread::sleep(Duration::from_millis(50));
+
+            if let Some(prev_text) = prev {
+                let _ = clipboard.set_text(prev_text);
+            }
+
+            Ok(())
+        }
     }
 
     /// Injects text with a specified delay between characters.
