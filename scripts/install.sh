@@ -74,7 +74,11 @@ install_macos() {
 
     if [ -d "/Applications/AirType.app" ]; then
         info "Removing existing /Applications/AirType.app"
-        rm -rf "/Applications/AirType.app"
+        # Quit any running instance so rm/copy don't race with it.
+        osascript -e 'tell application "AirType" to quit' >/dev/null 2>&1 || true
+        sleep 1
+        rm -rf "/Applications/AirType.app" \
+            || err "could not remove existing AirType.app (is it still running?)"
     fi
 
     info "Copying AirType.app to /Applications"
@@ -98,25 +102,26 @@ install_linux() {
     esac
 
     launch_cmd="AirType"
-    # Prefer package managers if present, else fall back to AppImage
+    # Prefer package managers if present, else fall back to AppImage.
+    # Use reinstall-style flags so re-running this script always results
+    # in the downloaded version being the installed version, even when
+    # the same version is already present.
     if command -v apt-get >/dev/null 2>&1 || command -v dpkg >/dev/null 2>&1; then
         asset="AirType_${VERSION_NUM}_amd64.deb"
         pkg="$(download "$asset")"
         info "Installing .deb (requires sudo)"
-        if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get install -y "$pkg"
-        else
-            sudo dpkg -i "$pkg" || sudo apt-get -f install -y || true
-        fi
+        # dpkg -i always replaces, regardless of version. Fix any missing
+        # deps with apt afterwards.
+        sudo dpkg -i "$pkg" || sudo apt-get -f install -y || true
     elif command -v dnf >/dev/null 2>&1 || command -v rpm >/dev/null 2>&1; then
         asset="AirType-${VERSION_NUM}-1.x86_64.rpm"
         pkg="$(download "$asset")"
         info "Installing .rpm (requires sudo)"
-        if command -v dnf >/dev/null 2>&1; then
-            sudo dnf install -y "$pkg"
-        else
-            sudo rpm -Uvh --replacepkgs "$pkg"
-        fi
+        # rpm -Uvh --force reinstalls the package even if the same
+        # version is present and overwrites owned files.
+        sudo rpm -Uvh --force "$pkg" \
+            || (command -v dnf >/dev/null 2>&1 && sudo dnf reinstall -y "$pkg") \
+            || (command -v dnf >/dev/null 2>&1 && sudo dnf install -y "$pkg")
     else
         asset="AirType_${VERSION_NUM}_amd64.AppImage"
         appimg="$(download "$asset")"

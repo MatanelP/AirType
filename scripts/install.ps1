@@ -62,8 +62,13 @@ try {
 
     Info 'Launching installer (may prompt for elevation)…'
     if ($Installer -eq 'msi') {
+        # REINSTALL=ALL + REINSTALLMODE=amus forces Windows Installer to
+        # overwrite the install even when the same ProductVersion is
+        # already present, so re-running this script always results in a
+        # clean install of the downloaded build.
         $proc = Start-Process -FilePath 'msiexec.exe' `
-            -ArgumentList @('/i', "`"$out`"", '/qb', '/norestart') `
+            -ArgumentList @('/i', "`"$out`"", '/qb', '/norestart',
+                            'REINSTALL=ALL', 'REINSTALLMODE=amus') `
             -Wait -PassThru -Verb RunAs
     } else {
         $proc = Start-Process -FilePath $out `
