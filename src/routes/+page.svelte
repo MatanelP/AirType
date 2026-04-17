@@ -199,7 +199,15 @@
 <main class="app" data-tauri-drag-region>
   <!-- Title Bar -->
   <header class="title-bar" data-tauri-drag-region>
-    <div class="app-name">AirType</div>
+    <div class="app-name">
+      <svg class="app-logo" width="32" height="32" viewBox="0 -64 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="205" y="62" width="102" height="168" rx="51" fill="#5E8DA6"/>
+        <path d="M186,180 A70,70 0 0,0 326,180" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round" fill="none"/>
+        <line x1="256" y1="250" x2="256" y2="312" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round"/>
+        <line x1="220" y1="312" x2="292" y2="312" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round"/>
+      </svg>
+      AirType
+    </div>
     <button class="settings-btn" onclick={() => settingsOpen = true} aria-label="Open settings">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="3"></circle>
@@ -343,10 +351,17 @@
   }
   
   .app-name {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     font-size: 0.875rem;
     font-weight: 600;
     color: var(--color-text-muted);
     letter-spacing: 0.05em;
+  }
+
+  .app-logo {
+    flex-shrink: 0;
   }
   
   .settings-btn {
@@ -525,6 +540,7 @@
     line-height: 1.25;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow-y: auto;
   }
