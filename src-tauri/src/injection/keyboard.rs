@@ -234,11 +234,23 @@ impl TextInjector {
             #[cfg(not(target_os = "macos"))]
             let modifier = Key::Control;
 
+            // On macOS, `Key::Unicode('v')` routes through Apple's Text
+            // Services Manager (TSMGetInputSourceProperty) to resolve the
+            // current keyboard layout. TSM asserts that it must run on the
+            // main thread (libdispatch's dispatch_assert_queue), so calling
+            // it from a tokio worker or std::thread causes SIGTRAP. We
+            // sidestep TSM by passing the hardware virtual keycode for 'v'
+            // (kVK_ANSI_V = 0x09) directly via `Key::Other`.
+            #[cfg(target_os = "macos")]
+            let paste_key = Key::Other(0x09);
+            #[cfg(not(target_os = "macos"))]
+            let paste_key = Key::Unicode('v');
+
             self.enigo
                 .key(modifier, Direction::Press)
                 .map_err(|e| InjectionError::TypeError(e.to_string()))?;
             self.enigo
-                .key(Key::Unicode('v'), Direction::Click)
+                .key(paste_key, Direction::Click)
                 .map_err(|e| InjectionError::TypeError(e.to_string()))?;
             self.enigo
                 .key(modifier, Direction::Release)
