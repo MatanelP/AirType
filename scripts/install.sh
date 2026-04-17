@@ -13,7 +13,7 @@ set -eu
 REPO="${AIRTYPE_REPO:-MatanelP/AirType}"
 VERSION="${AIRTYPE_VERSION:-}"
 
-info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+info()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 warn()  { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 err()   { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
@@ -52,7 +52,7 @@ download() {
     url="https://github.com/$REPO/releases/download/$VERSION/$1"
     out="$TMPDIR/$1"
     info "Downloading $1"
-    curl -fL --progress-bar -o "$out" "$url" || err "download failed: $url"
+    curl -fL --progress-bar -o "$out" "$url" >&2 || err "download failed: $url"
     printf '%s' "$out"
 }
 
