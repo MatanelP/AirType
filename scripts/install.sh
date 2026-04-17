@@ -5,8 +5,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.sh | sh
 #
 # Env overrides:
-#   AIRTYPE_VERSION   Tag to install (default: latest release)
-#   AIRTYPE_REPO      owner/name (default: MatanelP/AirType)
+#   AIRTYPE_VERSION              Tag to install (default: latest release)
+#   AIRTYPE_REPO                 owner/name (default: MatanelP/AirType)
+#   AIRTYPE_RESET_PERMISSIONS=1  macOS only — reset TCC grants for AirType
+#                                so the OS re-prompts for mic/apple-events
+#                                on first launch (simulates a brand-new Mac)
 
 set -eu
 
@@ -87,6 +90,15 @@ install_macos() {
 
     info "Stripping quarantine attribute"
     xattr -cr /Applications/AirType.app 2>/dev/null || true
+
+    if [ "${AIRTYPE_RESET_PERMISSIONS:-0}" = "1" ] && command -v tccutil >/dev/null 2>&1; then
+        info "Resetting macOS TCC permissions for com.airtype.app"
+        # Each service is independent; ignore failures for services the
+        # app never requested (tccutil returns non-zero in that case).
+        for svc in Microphone AppleEvents Accessibility All; do
+            tccutil reset "$svc" com.airtype.app >/dev/null 2>&1 || true
+        done
+    fi
 
     info "Unmounting DMG"
     hdiutil detach -quiet "$mnt" >/dev/null 2>&1 || true
