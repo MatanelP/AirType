@@ -89,14 +89,18 @@ jobs:
         run: npm ci
 
       - name: Disable native CPU detection for whisper.cpp
-        run: echo 'set(GGML_NATIVE OFF CACHE BOOL "" FORCE)' > $RUNNER_TEMP/no-native.cmake
+        run: |
+          cat > $RUNNER_TEMP/no-native.cmake <<EOF
+          set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+          set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "" FORCE)
+          EOF
 
       - name: Build Tauri app
         run: npx tauri build -- --target aarch64-apple-darwin
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
           CMAKE_TOOLCHAIN_FILE: ${{ runner.temp }}/no-native.cmake
-          MACOSX_DEPLOYMENT_TARGET: '10.15'
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
