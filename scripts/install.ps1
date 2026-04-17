@@ -73,7 +73,27 @@ try {
     if ($proc.ExitCode -ne 0) {
         Die "installer exited with code $($proc.ExitCode)"
     }
-    Info 'Installed. Launch AirType from the Start menu.'
+    Info 'Installed.'
+
+    $launchCmd = 'Start-Process -FilePath "AirType"'
+    $doLaunch = $false
+    if ($env:AIRTYPE_NO_LAUNCH) {
+        Info "Launch later from the Start menu or: $launchCmd"
+    } elseif ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
+        $ans = Read-Host '==> Launch AirType now? [Y/n]'
+        if ($ans -eq '' -or $ans -match '^(y|yes)$') { $doLaunch = $true }
+    } else {
+        Info "Launch later from the Start menu or: $launchCmd"
+    }
+
+    if ($doLaunch) {
+        Info 'Launching…'
+        try {
+            Start-Process -FilePath 'AirType' -ErrorAction Stop
+        } catch {
+            Warn "could not launch via 'AirType' on PATH. Opening from Start menu or re-login may be required."
+        }
+    }
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

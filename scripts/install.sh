@@ -87,7 +87,8 @@ install_macos() {
     info "Unmounting DMG"
     hdiutil detach -quiet "$mnt" >/dev/null 2>&1 || true
 
-    info "Installed. Launch with: open -a AirType"
+    info "Installed to /Applications/AirType.app"
+    prompt_launch "open -a AirType"
 }
 
 install_linux() {
@@ -96,6 +97,7 @@ install_linux() {
         *)            err "unsupported Linux arch: $ARCH (only x86_64 is published)" ;;
     esac
 
+    launch_cmd="AirType"
     # Prefer package managers if present, else fall back to AppImage
     if command -v apt-get >/dev/null 2>&1 || command -v dpkg >/dev/null 2>&1; then
         asset="AirType_${VERSION_NUM}_amd64.deb"
@@ -122,13 +124,43 @@ install_linux() {
         mkdir -p "$dest"
         install -m 0755 "$appimg" "$dest/AirType.AppImage"
         info "Installed AppImage to $dest/AirType.AppImage"
+        launch_cmd="$dest/AirType.AppImage"
         case ":$PATH:" in
             *":$dest:"*) ;;
             *) warn "$dest is not on your PATH. Add it to your shell profile to launch from anywhere." ;;
         esac
     fi
 
-    info "Installed. Launch 'AirType' from your application menu or run the binary directly."
+    info "Installed."
+    prompt_launch "$launch_cmd"
+}
+
+# Ask whether to launch now. Reads from /dev/tty so it works when piped
+# through `curl | sh` (which has stdin consumed by the pipe).
+# Falls back to "no" non-interactively.
+prompt_launch() {
+    cmd="$1"
+    if [ -n "${AIRTYPE_NO_LAUNCH:-}" ]; then
+        info "Launch later with: $cmd"
+        return
+    fi
+    if [ ! -r /dev/tty ]; then
+        info "Launch later with: $cmd"
+        return
+    fi
+    printf '\033[1;34m==>\033[0m Launch AirType now? [Y/n] ' >&2
+    ans=''
+    read -r ans < /dev/tty || ans=''
+    case "$ans" in
+        ''|y|Y|yes|YES|Yes)
+            info "Launching…"
+            # shellcheck disable=SC2086
+            ( eval "$cmd" >/dev/null 2>&1 & ) || warn "could not launch; run: $cmd"
+            ;;
+        *)
+            info "OK. Launch later with: $cmd"
+            ;;
+    esac
 }
 
 case "$PLATFORM" in
