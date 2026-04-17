@@ -96,6 +96,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
           CMAKE_TOOLCHAIN_FILE: ${{ runner.temp }}/no-native.cmake
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
