@@ -1,7 +1,8 @@
-//! RunPod Serverless API client for Hebrew transcription
+//! RunPod Serverless API client for transcription
 //!
 //! Uses ivrit-ai's official RunPod Serverless deployment with the
 //! ivrit-ai/whisper-large-v3-turbo-ct2 model. Pay-per-second pricing.
+//! Supports both Hebrew (ivrit-ai optimised) and English via language param.
 //! See: https://github.com/ivrit-ai/runpod-serverless
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -52,29 +53,38 @@ struct RunPodResponse {
 /// * `api_key` - RunPod API key
 /// * `endpoint_id` - RunPod endpoint ID for the ivrit-ai deployment
 /// * `audio_samples` - f32 mono samples at 16kHz
-///
-/// # Returns
-/// Transcribed Hebrew text
+/// * `language` - BCP-47 language code (e.g. "he", "en")
+pub async fn transcribe_audio(
+    api_key: &str,
+    endpoint_id: &str,
+    audio_samples: &[f32],
+    language: &str,
+) -> Result<String, String> {
+    let wav_bytes = encode_wav(audio_samples, 16000);
+    transcribe_audio_wav(api_key, endpoint_id, &wav_bytes, language).await
+}
+
+/// Transcribe Hebrew audio using ivrit-ai on RunPod Serverless (convenience wrapper).
 pub async fn transcribe_hebrew(
     api_key: &str,
     endpoint_id: &str,
     audio_samples: &[f32],
 ) -> Result<String, String> {
-    let wav_bytes = encode_wav(audio_samples, 16000);
-    transcribe_hebrew_wav(api_key, endpoint_id, &wav_bytes).await
+    transcribe_audio(api_key, endpoint_id, audio_samples, "he").await
 }
 
-/// Transcribe Hebrew WAV bytes using ivrit-ai on RunPod Serverless.
-pub async fn transcribe_hebrew_wav(
+/// Transcribe WAV bytes using ivrit-ai on RunPod Serverless.
+pub async fn transcribe_audio_wav(
     api_key: &str,
     endpoint_id: &str,
     wav_bytes: &[u8],
+    language: &str,
 ) -> Result<String, String> {
     let blob = BASE64.encode(wav_bytes);
 
     let data_len = wav_bytes.len().saturating_sub(44);
     let duration = data_len as f64 / 2.0 / 16000.0;
-    log::info!("Sending {:.1}s of audio to RunPod ivrit-ai endpoint {}...", duration, endpoint_id);
+    log::info!("Sending {:.1}s of {} audio to RunPod endpoint {}...", duration, language, endpoint_id);
 
     let payload = RunPodRequest {
         input: RunPodInput {
@@ -83,7 +93,7 @@ pub async fn transcribe_hebrew_wav(
             streaming: false,
             transcribe_args: TranscribeArgs {
                 blob,
-                language: "he".to_string(),
+                language: language.to_string(),
                 output_options: Some(OutputOptions {
                     word_timestamps: false,
                     extra_data: false,
@@ -130,11 +140,19 @@ pub async fn transcribe_hebrew_wav(
         ));
     }
 
-    // Parse output: { "result": [[{"text": "...", ...}]] }
     let text = extract_text_from_output(&result.output)?;
 
-    log::info!("RunPod ivrit-ai transcription: {}", text);
+    log::info!("RunPod {} transcription: {}", language, text);
     Ok(text)
+}
+
+/// Transcribe Hebrew WAV bytes using ivrit-ai on RunPod Serverless (convenience wrapper).
+pub async fn transcribe_hebrew_wav(
+    api_key: &str,
+    endpoint_id: &str,
+    wav_bytes: &[u8],
+) -> Result<String, String> {
+    transcribe_audio_wav(api_key, endpoint_id, wav_bytes, "he").await
 }
 
 /// Extract transcription text from RunPod output

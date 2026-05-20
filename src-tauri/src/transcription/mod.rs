@@ -12,7 +12,7 @@ mod whisper;
 
 pub use openai_batch::transcribe_english_test;
 pub use openai_realtime::OpenAIRealtimeTranscriber;
-pub use runpod::{transcribe_hebrew, transcribe_hebrew_wav, validate_runpod};
+pub use runpod::{transcribe_audio, transcribe_hebrew, transcribe_hebrew_wav, validate_runpod};
 pub use test_audio::{english_test_wav, hebrew_test_wav};
 pub use whisper::{
     create_shared_transcriber, Language, Result, SharedTranscriber, TranscriptionError,

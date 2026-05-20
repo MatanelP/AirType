@@ -129,6 +129,14 @@ impl KeyboardListener {
         state.active_hotkeys.remove(&modifier);
     }
 
+    /// Clear all registered modifier hotkeys (used when re-registering after settings change)
+    pub fn clear_all_modifier_hotkeys(&self) {
+        let mut state = self.state.write();
+        state.hotkeys.clear();
+        state.active_hotkeys.clear();
+        state.pressed_modifiers.clear();
+    }
+
     /// Start listening for keyboard events
     pub fn start(&self) {
         let state = Arc::clone(&self.state);

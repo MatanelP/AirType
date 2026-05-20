@@ -138,9 +138,15 @@
 
   async function saveSettings() {
     isSaving = true;
+    const prevEnHotkey = settings.hotkey_english;
+    const prevHeHotkey = settings.hotkey_hebrew;
     try {
       await invoke('save_settings', { settings: localSettings });
       onSettingsChange(localSettings);
+      // Re-register hotkeys if they changed
+      if (localSettings.hotkey_english !== prevEnHotkey || localSettings.hotkey_hebrew !== prevHeHotkey) {
+        await invoke('update_hotkeys').catch(e => console.error('update_hotkeys failed:', e));
+      }
     } catch (e) {
       console.error('Failed to save settings:', e);
     } finally {
@@ -233,6 +239,8 @@
       pendingModifiers = [];
       pendingKey = null;
       lastModifierCode = null;
+      // Re-register hotkeys so the change takes effect immediately
+      setTimeout(() => invoke('update_hotkeys').catch(e => console.error('update_hotkeys:', e)), 400);
     }
   }
 
@@ -251,10 +259,57 @@
       // Single modifier key was pressed and released - save it
       console.log(`[AirType] Modifier-only hotkey detected: ${e.code}`);
       updateSetting(recordingHotkeyFor, e.code);
+      // Re-register immediately so the new hotkey works without restart
+      const field = recordingHotkeyFor;
       recordingHotkeyFor = null;
       pendingModifiers = [];
       pendingKey = null;
       lastModifierCode = null;
+      // Save and re-register (debounce covers save, but force hotkey update)
+      setTimeout(() => invoke('update_hotkeys').catch(e => console.error('update_hotkeys:', e)), 400);
+    }
+  }
+
+  // ── Log viewer ────────────────────────────────────────────────────────────
+  let logs = $state([]);
+  let logsOpen = $state(false);
+  let logsLoading = $state(false);
+  let exportedPath = $state('');
+
+  async function loadLogs() {
+    logsLoading = true;
+    try {
+      logs = await invoke('get_app_logs');
+    } catch (e) {
+      console.error('Failed to load logs:', e);
+    } finally {
+      logsLoading = false;
+    }
+  }
+
+  async function exportLogs() {
+    try {
+      exportedPath = await invoke('export_logs');
+    } catch (e) {
+      console.error('Failed to export logs:', e);
+    }
+  }
+
+  function copyLogs() {
+    const text = logs.map(e => `[${new Date(e.timestamp).toISOString()}] ${e.level} ${e.target} — ${e.message}`).join('\n');
+    navigator.clipboard.writeText(text);
+  }
+
+  $effect(() => {
+    if (logsOpen && logs.length === 0) loadLogs();
+  });
+
+  function logLevelColor(level) {
+    switch (level) {
+      case 'ERROR': return 'var(--color-error, #ef4444)';
+      case 'WARN':  return 'var(--color-warn, #f59e0b)';
+      case 'DEBUG': return 'var(--color-text-muted, #8888a0)';
+      default:      return 'var(--color-text, #f0f0f5)';
     }
   }
 
@@ -415,6 +470,58 @@
               <strong>English</strong>: Live streaming via OpenAI (text appears as you speak).<br/>
               <strong>Hebrew</strong>: Best-in-class ivrit-ai model via RunPod Serverless (pay-per-second, text after recording).
             </p>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">English Engine</span>
+                <span class="setting-desc">OpenAI: live streaming. RunPod: batch via same endpoint as Hebrew.</span>
+              </div>
+              <select
+                class="select-input"
+                value={localSettings.english_engine || 'openai'}
+                onchange={(e) => updateSetting('english_engine', e.target.value)}
+              >
+                <option value="openai">OpenAI Realtime (live)</option>
+                <option value="runpod">RunPod Whisper (batch)</option>
+              </select>
+            </div>
+
+            {#if (localSettings.english_engine || 'openai') === 'openai'}
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">OpenAI Model</span>
+                  <span class="setting-desc">Transcription model. Mini is cheaper; diarize adds speaker labels.</span>
+                </div>
+                <select
+                  class="select-input"
+                  value={localSettings.openai_realtime_model || 'gpt-4o-transcribe'}
+                  onchange={(e) => updateSetting('openai_realtime_model', e.target.value)}
+                >
+                  <option value="gpt-4o-transcribe">gpt-4o-transcribe (best)</option>
+                  <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe (cheaper)</option>
+                  <option value="gpt-4o-transcribe-diarize">gpt-4o-transcribe-diarize (speaker labels)</option>
+                  <option value="gpt-realtime-whisper">gpt-realtime-whisper</option>
+                </select>
+              </div>
+
+              <!-- Advanced: custom base URL (hidden by default) -->
+              <details class="advanced-details">
+                <summary class="advanced-summary">Advanced</summary>
+                <div class="setting-row" style="border-bottom:none; padding-top:0.5rem">
+                  <div class="setting-info">
+                    <span class="setting-label">WebSocket Base URL</span>
+                    <span class="setting-desc">Override for Azure OpenAI or custom endpoints. Leave blank for default.</span>
+                  </div>
+                  <input
+                    type="text"
+                    class="text-input"
+                    placeholder="wss://api.openai.com/v1/realtime"
+                    value={localSettings.openai_realtime_base_url || ''}
+                    oninput={(e) => updateSetting('openai_realtime_base_url', e.target.value || null)}
+                  />
+                </div>
+              </details>
+            {/if}
           {:else}
             <p class="section-note">Text appears after you stop recording. No internet or API key needed.</p>
           {/if}
@@ -526,6 +633,44 @@
             <span class="version-tag">v{appVersion}</span>
           {/if}
         </div>
+
+        <!-- Logs Section -->
+        <section class="settings-section">
+          <div class="logs-header" onclick={() => { logsOpen = !logsOpen; if (logsOpen) loadLogs(); }} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (logsOpen = !logsOpen)}>
+            <h3 style="margin:0">Logs</h3>
+            <div class="logs-header-actions">
+              {#if logsOpen}
+                <button class="log-action-btn" onclick={(e) => { e.stopPropagation(); loadLogs(); }} title="Refresh">↻</button>
+                <button class="log-action-btn" onclick={(e) => { e.stopPropagation(); copyLogs(); }} title="Copy all">⎘</button>
+                <button class="log-action-btn" onclick={(e) => { e.stopPropagation(); exportLogs(); }} title="Export to file">↓</button>
+              {/if}
+              <span class="logs-chevron">{logsOpen ? '▲' : '▼'}</span>
+            </div>
+          </div>
+
+          {#if exportedPath}
+            <p class="log-export-path">Saved: {exportedPath}</p>
+          {/if}
+
+          {#if logsOpen}
+            <div class="logs-pane">
+              {#if logsLoading}
+                <p class="log-empty">Loading…</p>
+              {:else if logs.length === 0}
+                <p class="log-empty">No log entries captured yet.</p>
+              {:else}
+                {#each logs as entry}
+                  <div class="log-entry">
+                    <span class="log-ts">{new Date(entry.timestamp).toISOString().replace('T',' ').slice(0,23)}</span>
+                    <span class="log-level" style="color:{logLevelColor(entry.level)}">{entry.level.slice(0,1)}</span>
+                    <span class="log-msg" style="color:{logLevelColor(entry.level)}">{entry.message}</span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </section>
+
       </div>
     </div>
   </div>
@@ -876,4 +1021,113 @@
   
   .download-btn:hover { opacity: 0.85; }
   .download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Log viewer */
+  .logs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    padding: 0.25rem 0 0.5rem;
+    user-select: none;
+  }
+  .logs-header:hover h3 { color: var(--color-text, #f0f0f5); }
+
+  .logs-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .log-action-btn {
+    background: transparent;
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 6px);
+    color: var(--color-text-muted, #8888a0);
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 0.15rem 0.4rem;
+    transition: all 0.15s;
+  }
+  .log-action-btn:hover {
+    color: var(--color-text, #f0f0f5);
+    border-color: var(--color-primary, #6366f1);
+  }
+
+  .logs-chevron {
+    font-size: 0.6rem;
+    color: var(--color-text-muted, #8888a0);
+    margin-left: 0.25rem;
+  }
+
+  .logs-pane {
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6875rem;
+  }
+
+  .log-entry {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.125rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    line-height: 1.4;
+    word-break: break-all;
+  }
+
+  .log-ts {
+    color: var(--color-text-muted, #8888a0);
+    flex-shrink: 0;
+    font-size: 0.625rem;
+  }
+
+  .log-level {
+    flex-shrink: 0;
+    font-weight: 700;
+    width: 0.75rem;
+  }
+
+  .log-msg { flex: 1; }
+
+  .log-empty {
+    color: var(--color-text-muted, #8888a0);
+    font-size: 0.75rem;
+    text-align: center;
+    padding: 1rem 0;
+    margin: 0;
+  }
+
+  .log-export-path {
+    font-size: 0.6875rem;
+    color: #10b981;
+    margin: 0.25rem 0 0;
+    word-break: break-all;
+  }
+
+  /* Advanced collapsible */
+  .advanced-details {
+    margin-top: 0.25rem;
+  }
+
+  .advanced-summary {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted, #8888a0);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0;
+  }
+  .advanced-summary::before { content: '▶'; font-size: 0.5rem; }
+  details[open] .advanced-summary::before { content: '▼'; }
+  .advanced-summary::-webkit-details-marker { display: none; }
+  .advanced-summary:hover { color: var(--color-text, #f0f0f5); }
 </style>

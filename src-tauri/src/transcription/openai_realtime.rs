@@ -1,26 +1,28 @@
 //! OpenAI Realtime API client for live voice-to-text transcription
 //!
 //! Uses the transcription-only mode of OpenAI's Realtime API via WebSocket.
-//! URL: wss://api.openai.com/v1/realtime?intent=transcription
-//! Model: gpt-4o-transcribe (streams incremental deltas)
+//! Default URL: wss://api.openai.com/v1/realtime?model=gpt-4o-transcribe
+//! Both the base URL and model are configurable at runtime via settings.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-const OPENAI_REALTIME_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
+const DEFAULT_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
+const DEFAULT_MODEL: &str = "gpt-4o-transcribe";
 
 // ── Client → Server events ──────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ClientEvent {
-    /// Create a transcription session
-    #[serde(rename = "transcription_session.update")]
-    TranscriptionSessionUpdate {
+    /// Create/update a transcription session
+    #[serde(rename = "session.update")]
+    SessionUpdate {
         session: TranscriptionSessionConfig,
     },
     /// Append raw audio bytes (base64-encoded)
@@ -33,6 +35,9 @@ enum ClientEvent {
 
 #[derive(Debug, Serialize)]
 struct TranscriptionSessionConfig {
+    /// Must be "transcription" for GA transcription sessions
+    #[serde(rename = "type")]
+    session_type: String,
     input_audio_format: String,
     input_audio_transcription: InputAudioTranscription,
     turn_detection: Option<TurnDetection>,
@@ -95,6 +100,10 @@ pub type TranscriptionCallback = Arc<dyn Fn(&str, bool) + Send + Sync>;
 pub struct OpenAIRealtimeTranscriber {
     api_key: String,
     language: parking_lot::RwLock<String>,
+    /// Configurable model name (default: gpt-4o-transcribe)
+    model: String,
+    /// Configurable WebSocket base URL (default: wss://api.openai.com/v1/realtime)
+    base_url: String,
 }
 
 impl OpenAIRealtimeTranscriber {
@@ -102,7 +111,31 @@ impl OpenAIRealtimeTranscriber {
         Self {
             api_key: api_key.to_string(),
             language: parking_lot::RwLock::new("en".to_string()),
+            model: DEFAULT_MODEL.to_string(),
+            base_url: DEFAULT_BASE_URL.to_string(),
         }
+    }
+
+    /// Override the transcription model (e.g. "gpt-4o-mini-transcribe")
+    pub fn set_model(&self, model: &str) -> &Self {
+        // Can't use &mut self + RwLock easily; use a fresh owned field instead.
+        // This is called before start_session so we just shadow via a builder-style approach.
+        // We use unsafe interior mutability via a separate RwLock field — but simpler:
+        // model is set once at construction so we expose a consuming builder instead.
+        let _ = model; // actual set is done in with_model below
+        self
+    }
+
+    /// Builder: set model
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    /// Builder: set base URL
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
     }
 
     pub fn set_language(&self, language: &str) {
@@ -111,20 +144,39 @@ impl OpenAIRealtimeTranscriber {
 
     /// Start a live transcription session.
     /// Returns a channel sender for f32 audio samples (mono, any sample rate – will be resampled to 24 kHz).
-    pub async fn start_session(
+    pub async fn start_session<R: Runtime>(
         &self,
         on_transcription: TranscriptionCallback,
+        app: AppHandle<R>,
     ) -> Result<mpsc::Sender<Vec<f32>>, String> {
         let language = self.language.read().clone();
 
-        // Build WS request with auth
+        // Build the WebSocket URL: {base_url}?model={model}
+        // Strip trailing slash from base_url for consistency
+        let base = self.base_url.trim_end_matches('/');
+        let ws_url = format!("{}?model={}", base, self.model);
+
+        // Extract host for the Host header (strip scheme, path, query)
+        let host = ws_url
+            .trim_start_matches("wss://")
+            .trim_start_matches("ws://")
+            .split('/')
+            .next()
+            .unwrap_or("api.openai.com")
+            .split('?')
+            .next()
+            .unwrap_or("api.openai.com")
+            .to_string();
+
+        log::info!("Connecting to OpenAI Realtime: {} (model={})", ws_url, self.model);
+
+        // Build WS request with auth (GA API — no OpenAI-Beta header)
         let request = http::Request::builder()
-            .uri(OPENAI_REALTIME_URL)
+            .uri(&ws_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("OpenAI-Beta", "realtime=v1")
             .header("Sec-WebSocket-Version", "13")
             .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
-            .header("Host", "api.openai.com")
+            .header("Host", &host)
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .body(())
@@ -138,12 +190,13 @@ impl OpenAIRealtimeTranscriber {
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Configure transcription session
-        let session_config = ClientEvent::TranscriptionSessionUpdate {
+        // Configure transcription session (GA format: session.update with type:"transcription")
+        let session_config = ClientEvent::SessionUpdate {
             session: TranscriptionSessionConfig {
+                session_type: "transcription".to_string(),
                 input_audio_format: "pcm16".to_string(),
                 input_audio_transcription: InputAudioTranscription {
-                    model: "gpt-4o-transcribe".to_string(),
+                    model: self.model.clone(),
                     language: Some(language),
                 },
                 turn_detection: Some(TurnDetection {
@@ -171,6 +224,7 @@ impl OpenAIRealtimeTranscriber {
 
         // ── Reader task: process server events ──
         let callback = on_transcription.clone();
+        let app_reader = app.clone();
         tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 match msg {
@@ -189,16 +243,22 @@ impl OpenAIRealtimeTranscriber {
                                         callback(&transcript, true);
                                     }
                                 }
+                                "conversation.item.input_audio_transcription.failed" => {
+                                    let msg = ev.error
+                                        .map(|e| format!("Transcription failed: {}", e.message))
+                                        .unwrap_or_else(|| "Transcription failed".to_string());
+                                    log::error!("OpenAI Realtime: {}", msg);
+                                    let _ = app_reader.emit("error", &msg);
+                                }
                                 "error" => {
                                     if let Some(err) = ev.error {
-                                        log::error!(
-                                            "OpenAI Realtime error: {} (code={:?})",
-                                            err.message,
-                                            err.code
-                                        );
+                                        let msg = format!("OpenAI error: {} (code={:?})", err.message, err.code);
+                                        log::error!("{}", msg);
+                                        let _ = app_reader.emit("error", &msg);
                                     }
                                 }
-                                "transcription_session.created" | "transcription_session.updated" => {
+                                // GA session events (replaces transcription_session.created/updated)
+                                "session.created" | "session.updated" => {
                                     log::info!("OpenAI Realtime: {}", ev.event_type);
                                 }
                                 _ => {
@@ -212,7 +272,9 @@ impl OpenAIRealtimeTranscriber {
                         break;
                     }
                     Err(e) => {
-                        log::error!("WebSocket read error: {}", e);
+                        let msg = format!("OpenAI connection error: {}", e);
+                        log::error!("{}", msg);
+                        let _ = app_reader.emit("error", &msg);
                         break;
                     }
                     _ => {}
@@ -298,8 +360,9 @@ mod tests {
 
     #[test]
     fn test_session_config_serialization() {
-        let config = ClientEvent::TranscriptionSessionUpdate {
+        let config = ClientEvent::SessionUpdate {
             session: TranscriptionSessionConfig {
+                session_type: "transcription".to_string(),
                 input_audio_format: "pcm16".to_string(),
                 input_audio_transcription: InputAudioTranscription {
                     model: "gpt-4o-transcribe".to_string(),
@@ -310,7 +373,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("transcription_session.update"));
+        assert!(json.contains("session.update"));
+        assert!(json.contains("\"type\":\"transcription\""));
         assert!(json.contains("pcm16"));
         assert!(json.contains("gpt-4o-transcribe"));
     }

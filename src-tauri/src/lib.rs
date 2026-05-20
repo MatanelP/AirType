@@ -16,6 +16,7 @@ use tauri::{
 pub mod audio;
 pub mod hotkeys;
 pub mod injection;
+pub mod log_capture;
 pub mod models;
 pub mod settings;
 pub mod transcription;
@@ -26,9 +27,9 @@ use hotkeys::{
     KeyboardListener, ModifierKey,
 };
 use injection::TextInjector;
-use settings::{ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
+use settings::{EnglishEngine, ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
 use transcription::{
-    english_test_wav, hebrew_test_wav, transcribe_english_test, transcribe_hebrew,
+    english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_english_test,
     transcribe_hebrew_wav, validate_runpod, OpenAIRealtimeTranscriber, WhisperTranscriber,
 };
 
@@ -199,6 +200,18 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                     })?;
 
                 log::info!("Recording in progress (RunPod ivrit-ai for Hebrew)");
+            } else if settings.english_engine == EnglishEngine::RunPod {
+                // English via RunPod batch: just capture, transcribe on stop
+                let _rp_key = settings
+                    .runpod_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "RunPod API key not set. Go to Settings to add it.".to_string())?;
+                let _rp_endpoint = settings
+                    .runpod_endpoint_id
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
+
+                log::info!("Recording in progress (RunPod batch for English)");
             } else {
                 // English: OpenAI Realtime API for live streaming
                 let api_key = settings
@@ -209,7 +222,14 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                             .to_string()
                     })?;
 
-                let transcriber = OpenAIRealtimeTranscriber::new(&api_key);
+                // Apply runtime-configurable model and base URL from settings
+                let mut transcriber = OpenAIRealtimeTranscriber::new(&api_key);
+                if let Some(model) = settings.openai_realtime_model.filter(|m| !m.is_empty()) {
+                    transcriber = transcriber.with_model(model);
+                }
+                if let Some(base_url) = settings.openai_realtime_base_url.filter(|u| !u.is_empty()) {
+                    transcriber = transcriber.with_base_url(base_url);
+                }
                 transcriber.set_language(&language);
 
                 let app_for_callback = app.clone();
@@ -225,11 +245,11 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
                         });
                     } else if !text.is_empty() {
                         log::debug!("OpenAI transcription (delta): {}", text);
-                        let _ = app_for_callback.emit("transcription-delta", text);
+                        let _ = app_for_callback.emit("transcription-partial", text);
                     }
                 });
 
-                let audio_tx = transcriber.start_session(callback).await?;
+                let audio_tx = transcriber.start_session(callback, app.clone()).await?;
 
                 // Forward any samples already captured while the WebSocket was
                 // being established, then stream subsequent samples live.
@@ -284,15 +304,15 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
 
     match settings.transcription_engine {
         TranscriptionEngine::OpenAI => {
-            if language == "he" {
-                // Hebrew: use HuggingFace ivrit-ai batch API
+            if language == "he" || (language == "en" && settings.english_engine == EnglishEngine::RunPod) {
+                // RunPod batch path: Hebrew always, English when configured
                 if samples.is_empty() {
                     log::warn!("No audio samples captured");
                     hide_indicator(&app);
                     return Ok(String::new());
                 }
 
-                log::info!("Captured {} audio samples for Hebrew", samples.len());
+                log::info!("Captured {} audio samples for {} (RunPod)", samples.len(), language);
                 let _ = app.emit("transcribing", ());
                 indicator_transcribing(&app);
 
@@ -303,9 +323,9 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "RunPod Endpoint ID not set".to_string())?;
 
-                let transcription = transcribe_hebrew(&rp_key, &rp_endpoint, &samples).await?;
+                let transcription = transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?;
 
-                log::info!("Hebrew transcription: {}", transcription);
+                log::info!("{} transcription (RunPod): {}", language, transcription);
                 *state.last_transcription.write() = transcription.clone();
                 let _ = app.emit("transcription-complete", &transcription);
 
@@ -407,6 +427,148 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let store = state.settings_store.read();
     store.update(settings).map_err(|e| e.to_string())
+}
+
+/// Return captured log entries for in-app log viewer
+#[tauri::command]
+fn get_app_logs() -> Vec<log_capture::LogEntry> {
+    log_capture::get_entries()
+}
+
+/// Export captured logs to a timestamped file on the Desktop (or home dir).
+/// Returns the file path written.
+#[tauri::command]
+fn export_logs() -> Result<String, String> {
+    let entries = log_capture::get_entries();
+
+    // Build text content
+    let mut content = String::new();
+    for e in &entries {
+        // Convert Unix ms to readable timestamp
+        let secs = e.timestamp / 1000;
+        let ms = e.timestamp % 1000;
+        content.push_str(&format!(
+            "[{}.{:03}] {} {} — {}\n",
+            secs, ms, e.level, e.target, e.message
+        ));
+    }
+
+    // Choose export path: ~/Desktop if it exists, else home dir
+    let base = dirs::desktop_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Format as YYYYMMDD-HHMMSS (UTC approximation)
+    let day = now / 86400;
+    let time = now % 86400;
+    let date_str = format!("{}-{:02}:{:02}:{:02}",
+        1970 + day / 365, (time / 3600) % 24, (time / 60) % 60, time % 60);
+    let filename = format!("airtype-logs-{}.txt", now);
+    let path = base.join(&filename);
+
+    std::fs::write(&path, &content)
+        .map_err(|e| format!("Failed to write log file: {}", e))?;
+
+    let _ = date_str; // suppress unused warning
+    log::info!("Exported {} log entries to {:?}", entries.len(), path);
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Re-register all hotkeys from current settings. Call after saving settings that changed hotkeys.
+#[tauri::command]
+fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.get_settings();
+    let english_hotkey = settings.hotkey_english.clone();
+    let hebrew_hotkey = settings.hotkey_hebrew.clone();
+    let hotkey_mode = settings.hotkey_mode;
+
+    // 1. Unregister all existing global shortcuts
+    let _ = state.hotkey_manager.unregister_all(&app);
+
+    // 2. Clear modifier-only hotkey registrations (the listener thread keeps running)
+    state.keyboard_listener.clear_all_modifier_hotkeys();
+
+    // 3. Re-register non-modifier hotkeys via global shortcut plugin
+    let english_is_modifier = is_modifier_only_hotkey(&english_hotkey);
+    let hebrew_is_modifier = is_modifier_only_hotkey(&hebrew_hotkey);
+
+    if !english_is_modifier && !english_hotkey.is_empty() {
+        let config = hotkeys::HotkeyConfig::new(
+            &english_hotkey,
+            hotkeys::HotkeyAction::RecordEnglish,
+            hotkeys::HotkeyMode::from(hotkey_mode),
+        );
+        if let Err(e) = state.hotkey_manager.register_shortcut(&app, config) {
+            log::error!("Failed to register English hotkey '{}': {}", english_hotkey, e);
+            return Err(format!("Failed to register English hotkey: {}", e));
+        }
+        log::info!("Registered English hotkey: {}", english_hotkey);
+    }
+
+    if !hebrew_is_modifier && !hebrew_hotkey.is_empty() {
+        let config = hotkeys::HotkeyConfig::new(
+            &hebrew_hotkey,
+            hotkeys::HotkeyAction::RecordHebrew,
+            hotkeys::HotkeyMode::from(hotkey_mode),
+        );
+        if let Err(e) = state.hotkey_manager.register_shortcut(&app, config) {
+            log::error!("Failed to register Hebrew hotkey '{}': {}", hebrew_hotkey, e);
+            return Err(format!("Failed to register Hebrew hotkey: {}", e));
+        }
+        log::info!("Registered Hebrew hotkey: {}", hebrew_hotkey);
+    }
+
+    // 4. Re-register modifier-only hotkeys
+    let keyboard_listener = state.keyboard_listener.clone();
+    let app_en = app.clone();
+    if let Some(modifier) = ModifierKey::from_str(&english_hotkey) {
+        let mode = hotkey_mode;
+        keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
+            if pressed {
+                prewarm_capture(&app_en, "en");
+            }
+            let event = if pressed {
+                HotkeyEvent::RecordingStart { language: "en".to_string() }
+            } else if mode == settings::HotkeyMode::Hold {
+                HotkeyEvent::RecordingStop
+            } else {
+                return;
+            };
+            let _ = app_en.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+        });
+        log::info!("Registered modifier English hotkey: {:?}", modifier);
+    }
+
+    if let Some(modifier) = ModifierKey::from_str(&hebrew_hotkey) {
+        let mode = hotkey_mode;
+        let app_he = app.clone();
+        keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
+            if pressed {
+                prewarm_capture(&app_he, "he");
+            }
+            let event = if pressed {
+                HotkeyEvent::RecordingStart { language: "he".to_string() }
+            } else if mode == settings::HotkeyMode::Hold {
+                HotkeyEvent::RecordingStop
+            } else {
+                return;
+            };
+            let _ = app_he.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+        });
+        log::info!("Registered modifier Hebrew hotkey: {:?}", modifier);
+    }
+
+    // 5. Ensure the keyboard listener is running if any modifier hotkeys are registered
+    if english_is_modifier || hebrew_is_modifier {
+        keyboard_listener.start(); // no-op if already running
+    }
+
+    log::info!("Hotkeys updated successfully");
+    Ok(())
 }
 
 /// Validate OpenAI API key by making a lightweight request
@@ -712,8 +874,8 @@ use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logger
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Initialize logger with in-memory capture (replaces plain env_logger::init)
+    log_capture::init("info");
 
     log::info!("Starting AirType...");
 
@@ -788,6 +950,9 @@ pub fn run() {
             validate_openai_key,
             validate_runpod_key,
             run_transcription_test,
+            get_app_logs,
+            export_logs,
+            update_hotkeys,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");

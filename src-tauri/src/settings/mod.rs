@@ -40,6 +40,17 @@ pub enum RecordingMode {
     Live,
 }
 
+/// Which engine to use for English transcription (when TranscriptionEngine is OpenAI)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EnglishEngine {
+    /// OpenAI Realtime WebSocket (live streaming, higher quality)
+    #[default]
+    OpenAI,
+    /// RunPod Whisper batch (uses same RunPod endpoint as Hebrew, no streaming)
+    RunPod,
+}
+
 /// Transcription engine to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -106,6 +117,9 @@ pub struct Settings {
     /// Which transcription engine to use
     #[serde(default)]
     pub transcription_engine: TranscriptionEngine,
+    /// Which engine to use for English transcription (openai realtime or runpod batch)
+    #[serde(default)]
+    pub english_engine: EnglishEngine,
     /// OpenAI API key (required for OpenAI engine)
     #[serde(default)]
     pub openai_api_key: Option<String>,
@@ -115,6 +129,13 @@ pub struct Settings {
     /// RunPod Endpoint ID for ivrit-ai deployment
     #[serde(default)]
     pub runpod_endpoint_id: Option<String>,
+    /// OpenAI Realtime model (default: "gpt-4o-transcribe")
+    #[serde(default)]
+    pub openai_realtime_model: Option<String>,
+    /// OpenAI Realtime WebSocket base URL — override for Azure or custom deployments.
+    /// Default: "wss://api.openai.com/v1/realtime"
+    #[serde(default)]
+    pub openai_realtime_base_url: Option<String>,
     /// Whether to show transcription live as you speak
     pub live_transcription: bool,
     /// Custom path to Whisper model file (overrides model_size if set)
@@ -137,9 +158,12 @@ impl Default for Settings {
             hotkey_mode: HotkeyMode::default(),
             recording_mode: RecordingMode::default(),
             transcription_engine: TranscriptionEngine::default(),
+            english_engine: EnglishEngine::default(),
             openai_api_key: None,
             runpod_api_key: None,
             runpod_endpoint_id: None,
+            openai_realtime_model: None,
+            openai_realtime_base_url: None,
             live_transcription: false,
             model_path: None,
             model_size: ModelSize::default(),

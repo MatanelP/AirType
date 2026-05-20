@@ -49,3 +49,4 @@ src-tauri/gen/
 # Context docs (for development)
 AGENT_CONTEXT.md
 PLAN.md
+PROPOSAL.md
