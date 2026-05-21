@@ -26,6 +26,7 @@
   let error = $state(null);
   let recordingLanguage = $state('en');
   let indicatorState = $state('idle'); // idle, recording, transcribing, done
+  let needsAccessibility = $state(false);
   
   // Settings
   let settings = $state({
@@ -119,6 +120,16 @@
         isTranscribing = false;
         stopDurationTimer();
       }));
+
+      // Accessibility permission check (macOS text injection requirement)
+      try {
+        const trusted = /** @type {boolean} */ (await invoke('check_accessibility_permission'));
+        needsAccessibility = !trusted;
+      } catch (_) {}
+
+      unlisteners.push(await listen('accessibility-permission-needed', () => {
+        needsAccessibility = true;
+      }));
     })();
     
     // Cleanup on unmount
@@ -194,6 +205,18 @@
   function dismissError() {
     error = null;
   }
+
+  async function openAccessibilitySettings() {
+    await invoke('open_accessibility_settings');
+    // Poll for 10 s so the banner clears as soon as the user grants access
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const trusted = /** @type {boolean} */ (await invoke('check_accessibility_permission'));
+        if (trusted) { needsAccessibility = false; break; }
+      } catch (_) {}
+    }
+  }
 </script>
 
 <main class="app" data-tauri-drag-region>
@@ -215,6 +238,16 @@
       </svg>
     </button>
   </header>
+
+  <!-- Accessibility Permission Banner -->
+  {#if needsAccessibility}
+    <div class="accessibility-banner">
+      <span>⚠️ <strong>Accessibility access needed</strong> — text injection won't work without it.</span>
+      <button class="accessibility-btn" onclick={openAccessibilitySettings}>
+        Open System Settings
+      </button>
+    </div>
+  {/if}
   
   <!-- Main Content -->
   <section class="content">
@@ -576,5 +609,36 @@
   
   .dismiss-btn:hover {
     opacity: 1;
+  }
+
+  /* Accessibility permission banner */
+  .accessibility-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    background: rgba(245, 158, 11, 0.15);
+    border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fcd34d;
+    font-size: 0.8125rem;
+    flex-shrink: 0;
+  }
+
+  .accessibility-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: var(--radius-sm, 4px);
+    color: #fcd34d;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .accessibility-btn:hover {
+    background: rgba(245, 158, 11, 0.35);
   }
 </style>

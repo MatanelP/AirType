@@ -571,6 +571,34 @@ fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
     Ok(())
 }
 
+/// Check whether this process is trusted for Accessibility (macOS only).
+/// On non-macOS platforms this always returns true.
+#[tauri::command]
+fn check_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrusted() -> bool;
+        }
+        unsafe { AXIsProcessTrusted() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// Open System Settings → Privacy & Security → Accessibility so the user can
+/// grant the required permission. macOS-only; no-op on other platforms.
+#[tauri::command]
+fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
+
 /// Validate OpenAI API key by making a lightweight request
 #[tauri::command]
 async fn validate_openai_key(api_key: String) -> Result<bool, String> {
@@ -953,6 +981,8 @@ pub fn run() {
             get_app_logs,
             export_logs,
             update_hotkeys,
+            check_accessibility_permission,
+            open_accessibility_settings,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");
@@ -1180,6 +1210,24 @@ pub fn run() {
             }
 
             log::info!("AirType setup complete");
+
+            // Check Accessibility permission (required for text injection on macOS).
+            // Emit event so the UI can show a persistent warning if not yet granted.
+            #[cfg(target_os = "macos")]
+            {
+                #[link(name = "ApplicationServices", kind = "framework")]
+                extern "C" {
+                    fn AXIsProcessTrusted() -> bool;
+                }
+                let trusted = unsafe { AXIsProcessTrusted() };
+                if !trusted {
+                    log::warn!("Accessibility permission not granted — text injection will not work. Grant access in System Settings → Privacy & Security → Accessibility.");
+                    let _ = app.emit("accessibility-permission-needed", ());
+                } else {
+                    log::info!("Accessibility permission: granted");
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
