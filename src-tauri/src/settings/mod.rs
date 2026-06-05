@@ -129,7 +129,8 @@ pub struct Settings {
     /// RunPod Endpoint ID for ivrit-ai deployment
     #[serde(default)]
     pub runpod_endpoint_id: Option<String>,
-    /// OpenAI Realtime model (default: "gpt-4o-transcribe")
+    /// OpenAI transcription model used inside the realtime session (default: "gpt-realtime-whisper").
+    /// This is passed as audio.input.transcription.model in the session config.
     #[serde(default)]
     pub openai_realtime_model: Option<String>,
     /// OpenAI Realtime WebSocket base URL — override for Azure or custom deployments.

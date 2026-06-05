@@ -1,8 +1,11 @@
 //! OpenAI Realtime API client for live voice-to-text transcription
 //!
 //! Uses the transcription-only mode of OpenAI's Realtime API via WebSocket.
-//! Default URL: wss://api.openai.com/v1/realtime?model=gpt-4o-transcribe
-//! Both the base URL and model are configurable at runtime via settings.
+//! Default URL: wss://api.openai.com/v1/realtime?model=gpt-realtime-2
+//! The WebSocket session uses a realtime-class model (gpt-realtime-2) in the URL,
+//! while the transcription model (e.g. gpt-realtime-whisper) is passed inside
+//! audio.input.transcription.model in the session.update config.
+//! Both the base URL and models are configurable at runtime via settings.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
@@ -13,7 +16,10 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const DEFAULT_BASE_URL: &str = "wss://api.openai.com/v1/realtime";
-const DEFAULT_MODEL: &str = "gpt-4o-transcribe";
+/// Realtime session model for the WebSocket URL — must be a realtime-class model
+const DEFAULT_SESSION_MODEL: &str = "gpt-realtime-2";
+/// Transcription model — used inside audio.input.transcription.model
+const DEFAULT_TRANSCRIPTION_MODEL: &str = "gpt-realtime-whisper";
 
 // ── Client → Server events ──────────────────────────────────────────
 
@@ -35,14 +41,34 @@ enum ClientEvent {
 
 #[derive(Debug, Serialize)]
 struct TranscriptionSessionConfig {
-    /// Must be "transcription" for GA transcription sessions
+    /// Must be "transcription" for transcription-only sessions
     #[serde(rename = "type")]
     session_type: String,
-    input_audio_format: String,
-    input_audio_transcription: InputAudioTranscription,
-    turn_detection: Option<TurnDetection>,
+    /// Nested audio config containing format, transcription model, and noise reduction
+    audio: AudioConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioConfig {
+    input: AudioInputConfig,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioFormat {
+    #[serde(rename = "type")]
+    format_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    input_audio_noise_reduction: Option<NoiseReduction>,
+    rate: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioInputConfig {
+    format: AudioFormat,
+    transcription: InputAudioTranscription,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    noise_reduction: Option<NoiseReduction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_detection: Option<TurnDetection>,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,8 +126,10 @@ pub type TranscriptionCallback = Arc<dyn Fn(&str, bool) + Send + Sync>;
 pub struct OpenAIRealtimeTranscriber {
     api_key: String,
     language: parking_lot::RwLock<String>,
-    /// Configurable model name (default: gpt-4o-transcribe)
-    model: String,
+    /// Realtime session model for the WebSocket URL (default: gpt-realtime-2)
+    session_model: String,
+    /// Transcription model used in audio.input.transcription.model (default: gpt-realtime-whisper)
+    transcription_model: String,
     /// Configurable WebSocket base URL (default: wss://api.openai.com/v1/realtime)
     base_url: String,
 }
@@ -111,24 +139,23 @@ impl OpenAIRealtimeTranscriber {
         Self {
             api_key: api_key.to_string(),
             language: parking_lot::RwLock::new("en".to_string()),
-            model: DEFAULT_MODEL.to_string(),
+            session_model: DEFAULT_SESSION_MODEL.to_string(),
+            transcription_model: DEFAULT_TRANSCRIPTION_MODEL.to_string(),
             base_url: DEFAULT_BASE_URL.to_string(),
         }
     }
 
-    /// Override the transcription model (e.g. "gpt-4o-mini-transcribe")
-    pub fn set_model(&self, model: &str) -> &Self {
-        // Can't use &mut self + RwLock easily; use a fresh owned field instead.
-        // This is called before start_session so we just shadow via a builder-style approach.
-        // We use unsafe interior mutability via a separate RwLock field — but simpler:
-        // model is set once at construction so we expose a consuming builder instead.
-        let _ = model; // actual set is done in with_model below
+    /// Builder: set the transcription model (e.g. "gpt-4o-mini-transcribe")
+    /// This goes in input_audio_transcription.model, NOT the WebSocket URL.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.transcription_model = model.into();
         self
     }
 
-    /// Builder: set model
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
+    /// Builder: set the realtime session model for the WebSocket URL
+    /// (e.g. "gpt-realtime-whisper")
+    pub fn with_session_model(mut self, model: impl Into<String>) -> Self {
+        self.session_model = model.into();
         self
     }
 
@@ -151,10 +178,14 @@ impl OpenAIRealtimeTranscriber {
     ) -> Result<mpsc::Sender<Vec<f32>>, String> {
         let language = self.language.read().clone();
 
-        // Build the WebSocket URL: {base_url}?model={model}
-        // Strip trailing slash from base_url for consistency
+        // Build the WebSocket URL: {base_url}?intent=transcription
+        // The transcription model (e.g. gpt-4o-transcribe) goes in session.update config.
         let base = self.base_url.trim_end_matches('/');
-        let ws_url = format!("{}?model={}", base, self.model);
+        let ws_url = if base.contains('?') {
+            format!("{}&intent=transcription", base)
+        } else {
+            format!("{}?intent=transcription", base)
+        };
 
         // Extract host for the Host header (strip scheme, path, query)
         let host = ws_url
@@ -168,7 +199,7 @@ impl OpenAIRealtimeTranscriber {
             .unwrap_or("api.openai.com")
             .to_string();
 
-        log::info!("Connecting to OpenAI Realtime: {} (model={})", ws_url, self.model);
+        log::info!("Connecting to OpenAI Realtime: {} (transcription_model={})", ws_url, self.transcription_model);
 
         // Build WS request with auth (GA API — no OpenAI-Beta header)
         let request = http::Request::builder()
@@ -190,24 +221,38 @@ impl OpenAIRealtimeTranscriber {
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Configure transcription session (GA format: session.update with type:"transcription")
+        // Configure transcription session
+        // All audio input settings go under audio.input.*
+        let turn_detection = if self.transcription_model == "gpt-realtime-whisper" {
+            None
+        } else {
+            Some(TurnDetection {
+                detection_type: "server_vad".to_string(),
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+            })
+        };
+
         let session_config = ClientEvent::SessionUpdate {
             session: TranscriptionSessionConfig {
                 session_type: "transcription".to_string(),
-                input_audio_format: "pcm16".to_string(),
-                input_audio_transcription: InputAudioTranscription {
-                    model: self.model.clone(),
-                    language: Some(language),
+                audio: AudioConfig {
+                    input: AudioInputConfig {
+                        format: AudioFormat {
+                            format_type: "audio/pcm".to_string(),
+                            rate: Some(24000),
+                        },
+                        transcription: InputAudioTranscription {
+                            model: self.transcription_model.clone(),
+                            language: Some(language),
+                        },
+                        noise_reduction: Some(NoiseReduction {
+                            noise_type: "near_field".to_string(),
+                        }),
+                        turn_detection,
+                    },
                 },
-                turn_detection: Some(TurnDetection {
-                    detection_type: "server_vad".to_string(),
-                    threshold: 0.5,
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 500,
-                }),
-                input_audio_noise_reduction: Some(NoiseReduction {
-                    noise_type: "near_field".to_string(),
-                }),
             },
         };
 
@@ -363,20 +408,31 @@ mod tests {
         let config = ClientEvent::SessionUpdate {
             session: TranscriptionSessionConfig {
                 session_type: "transcription".to_string(),
-                input_audio_format: "pcm16".to_string(),
-                input_audio_transcription: InputAudioTranscription {
-                    model: "gpt-4o-transcribe".to_string(),
-                    language: Some("en".to_string()),
+                audio: AudioConfig {
+                    input: AudioInputConfig {
+                        format: AudioFormat {
+                            format_type: "audio/pcm".to_string(),
+                            rate: Some(24000),
+                        },
+                        transcription: InputAudioTranscription {
+                            model: "gpt-realtime-whisper".to_string(),
+                            language: Some("en".to_string()),
+                        },
+                        noise_reduction: None,
+                        turn_detection: None,
+                    },
                 },
-                turn_detection: None,
-                input_audio_noise_reduction: None,
             },
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("session.update"));
         assert!(json.contains("\"type\":\"transcription\""));
-        assert!(json.contains("pcm16"));
-        assert!(json.contains("gpt-4o-transcribe"));
+        assert!(json.contains("\"format\":{\"type\":\"audio/pcm\",\"rate\":24000}"));
+        assert!(json.contains("gpt-realtime-whisper"));
+        // Verify the nested audio.input structure
+        assert!(json.contains("\"audio\":{\"input\":{"));
+        // input_audio_format should NOT appear at session level
+        assert!(!json.contains("input_audio_format"));
     }
 
     #[test]
