@@ -5,7 +5,6 @@
 //! and inserted at the cursor position.
 
 use parking_lot::RwLock;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -17,7 +16,6 @@ pub mod audio;
 pub mod hotkeys;
 pub mod injection;
 pub mod log_capture;
-pub mod models;
 pub mod settings;
 pub mod transcription;
 
@@ -27,20 +25,16 @@ use hotkeys::{
     KeyboardListener, ModifierKey,
 };
 use injection::TextInjector;
-use settings::{EnglishEngine, ModelSize, RecordingMode, Settings, SettingsStore, TranscriptionEngine};
+use settings::{EnglishEndpointType, Settings, SettingsStore};
 use transcription::{
-    english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_english_test,
-    transcribe_hebrew_wav, validate_runpod, OpenAIRealtimeTranscriber, WhisperTranscriber,
+    encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
+    transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
     /// Audio capture instance
     pub audio: RwLock<Option<Arc<AudioCapture>>>,
-    /// Whisper transcriber (lazy loaded)
-    pub transcriber: RwLock<Option<Arc<WhisperTranscriber>>>,
-    /// OpenAI Realtime session audio sender (when using OpenAI engine)
-    pub openai_audio_tx: RwLock<Option<tokio::sync::mpsc::Sender<Vec<f32>>>>,
     /// Current recording language
     pub recording_language: RwLock<String>,
     /// Hotkey manager
@@ -67,8 +61,6 @@ impl AppState {
         }
         Self {
             audio: RwLock::new(audio),
-            transcriber: RwLock::new(None),
-            openai_audio_tx: RwLock::new(None),
             recording_language: RwLock::new("en".to_string()),
             hotkey_manager,
             keyboard_listener,
@@ -83,30 +75,6 @@ impl AppState {
         self.settings_store.read().get()
     }
 
-    /// Get the model path based on settings
-    pub fn get_model_path(&self) -> Option<PathBuf> {
-        let settings = self.get_settings();
-        if let Some(path) = settings.model_path {
-            Some(path)
-        } else {
-            let models_dir = SettingsStore::get_models_dir();
-            // Always use multilingual model to support both English and Hebrew
-            let filename = settings.model_size.filename();
-            let path = models_dir.join(filename);
-            if path.exists() {
-                Some(path)
-            } else {
-                None
-            }
-        }
-    }
-
-    /// Get the model path for a specific language
-    /// Uses the same selected model for all languages
-    pub fn get_model_path_for_language(&self, _language: &str) -> Option<PathBuf> {
-        self.get_model_path()
-    }
-
     fn get_audio_capture(&self) -> Result<Arc<AudioCapture>, String> {
         if let Some(capture) = self.audio.read().as_ref() {
             return Ok(capture.clone());
@@ -117,42 +85,6 @@ impl AppState {
             .map_err(|e| format!("Failed to initialize audio: {}", e))?;
         *self.audio.write() = Some(capture.clone());
         Ok(capture)
-    }
-
-    /// Ensure transcriber is loaded for a specific language
-    pub fn ensure_transcriber_for_language(&self, language: &str) -> Result<(), String> {
-        let model_path = self
-            .get_model_path_for_language(language)
-            .ok_or_else(|| "No model file found. Please download a Whisper model.".to_string())?;
-
-        // Check if we need to reload (different model)
-        let mut transcriber_guard = self.transcriber.write();
-        
-        // Always create a new transcriber with the correct model for the language
-        let transcriber = WhisperTranscriber::new(&model_path);
-        let _ = transcriber.set_language(language);
-        *transcriber_guard = Some(Arc::new(transcriber));
-        Ok(())
-    }
-
-    /// Ensure transcriber is loaded
-    pub fn ensure_transcriber(&self) -> Result<(), String> {
-        let mut transcriber_guard = self.transcriber.write();
-        if transcriber_guard.is_some() {
-            return Ok(());
-        }
-
-        let model_path = self
-            .get_model_path()
-            .ok_or_else(|| "No model file found. Please download a Whisper model.".to_string())?;
-
-        let transcriber = WhisperTranscriber::new(&model_path);
-
-        // Default to English, language is set per-recording via hotkey
-        let _ = transcriber.set_language("en");
-
-        *transcriber_guard = Some(Arc::new(transcriber));
-        Ok(())
     }
 }
 
@@ -165,13 +97,9 @@ impl AppState {
 async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     log::info!("Starting recording (post-capture setup)...");
 
-    let settings = state.get_settings();
     let language = state.recording_language.read().clone();
 
-    // Ensure capture is active. When triggered from a hotkey, capture has
-    // already been started synchronously in the hotkey callback so that the
-    // microphone begins collecting samples with sub-perceptual latency.
-    // When triggered from the UI, start it here.
+    // Ensure capture is active.
     let capture = state.get_audio_capture()?;
     if !capture.is_recording() {
         capture.clear_stream_sender();
@@ -182,91 +110,7 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
     }
     *state.is_recording.write() = true;
 
-    match settings.transcription_engine {
-        TranscriptionEngine::OpenAI => {
-            if language == "he" {
-                // Hebrew: just capture audio, will use RunPod ivrit-ai batch API on stop
-                let _rp_key = settings
-                    .runpod_api_key
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        "RunPod API key not set. Go to Settings to add it.".to_string()
-                    })?;
-                let _rp_endpoint = settings
-                    .runpod_endpoint_id
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        "RunPod Endpoint ID not set. Go to Settings to add it.".to_string()
-                    })?;
-
-                log::info!("Recording in progress (RunPod ivrit-ai for Hebrew)");
-            } else if settings.english_engine == EnglishEngine::RunPod {
-                // English via RunPod batch: just capture, transcribe on stop
-                let _rp_key = settings
-                    .runpod_api_key
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod API key not set. Go to Settings to add it.".to_string())?;
-                let _rp_endpoint = settings
-                    .runpod_endpoint_id
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
-
-                log::info!("Recording in progress (RunPod batch for English)");
-            } else {
-                // English: OpenAI Realtime API for live streaming
-                let api_key = settings
-                    .openai_api_key
-                    .filter(|k| !k.is_empty())
-                    .ok_or_else(|| {
-                        "OpenAI API key not set. Go to Settings → Transcription Engine."
-                            .to_string()
-                    })?;
-
-                // Apply runtime-configurable model and base URL from settings
-                let mut transcriber = OpenAIRealtimeTranscriber::new(&api_key);
-                if let Some(model) = settings.openai_realtime_model.filter(|m| !m.is_empty()) {
-                    transcriber = transcriber.with_model(model);
-                }
-                if let Some(base_url) = settings.openai_realtime_base_url.filter(|u| !u.is_empty()) {
-                    transcriber = transcriber.with_base_url(base_url);
-                }
-                transcriber.set_language(&language);
-
-                let app_for_callback = app.clone();
-                let callback = Arc::new(move |text: &str, is_final: bool| {
-                    if is_final && !text.is_empty() {
-                        log::info!("OpenAI transcription (final): {}", text);
-                        let _ = app_for_callback.emit("transcription-complete", text);
-                        let text_owned = text.to_string();
-                        let _ = std::thread::spawn(move || {
-                            if let Ok(mut injector) = TextInjector::new() {
-                                let _ = injector.inject_text_clipboard(&text_owned);
-                            }
-                        });
-                    } else if !text.is_empty() {
-                        log::debug!("OpenAI transcription (delta): {}", text);
-                        let _ = app_for_callback.emit("transcription-partial", text);
-                    }
-                });
-
-                let audio_tx = transcriber.start_session(callback, app.clone()).await?;
-
-                // Forward any samples already captured while the WebSocket was
-                // being established, then stream subsequent samples live.
-                capture.set_stream_sender_with_flush(audio_tx.clone());
-
-                *state.openai_audio_tx.write() = Some(audio_tx);
-
-                log::info!("Recording in progress (OpenAI Realtime)");
-            }
-        }
-        TranscriptionEngine::LocalWhisper => {
-            // Local Whisper path: transcriber is pre-loaded in the hotkey
-            // handler. Re-check here in case this command came from the UI.
-            state.ensure_transcriber()?;
-            log::info!("Recording in progress (Local Whisper)");
-        }
-    }
+    log::info!("Recording in progress for language: {}", language);
 
     Ok(())
 }
@@ -300,120 +144,83 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     *state.is_recording.write() = false;
     let _ = app.emit("recording-stopped", ());
 
+    if samples.is_empty() {
+        log::warn!("No audio samples captured");
+        hide_indicator(&app);
+        return Ok(String::new());
+    }
+
     let language = state.recording_language.read().clone();
+    log::info!("Captured {} audio samples for {} (Batch)", samples.len(), language);
+    let _ = app.emit("transcribing", ());
+    indicator_transcribing(&app);
 
-    match settings.transcription_engine {
-        TranscriptionEngine::OpenAI => {
-            if language == "he" || (language == "en" && settings.english_engine == EnglishEngine::RunPod) {
-                // RunPod batch path: Hebrew always, English when configured
-                if samples.is_empty() {
-                    log::warn!("No audio samples captured");
-                    hide_indicator(&app);
-                    return Ok(String::new());
-                }
-
-                log::info!("Captured {} audio samples for {} (RunPod)", samples.len(), language);
-                let _ = app.emit("transcribing", ());
-                indicator_transcribing(&app);
-
+    let transcription = if language == "he" {
+        let rp_key = settings.runpod_api_key
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| "Hebrew default RunPod API key not set. Go to Settings to add it.".to_string())?;
+        let rp_endpoint = settings.runpod_endpoint_id
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| "Hebrew default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
+        
+        transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+    } else {
+        match settings.english_endpoint_type {
+            EnglishEndpointType::SharedRunPod => {
                 let rp_key = settings.runpod_api_key
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod API key not set".to_string())?;
+                    .ok_or_else(|| "Default RunPod API key not set. Go to Settings to add it.".to_string())?;
                 let rp_endpoint = settings.runpod_endpoint_id
                     .filter(|k| !k.is_empty())
-                    .ok_or_else(|| "RunPod Endpoint ID not set".to_string())?;
-
-                let transcription = transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?;
-
-                log::info!("{} transcription (RunPod): {}", language, transcription);
-                *state.last_transcription.write() = transcription.clone();
-                let _ = app.emit("transcription-complete", &transcription);
-
-                if !transcription.is_empty() {
-                    log::info!("Injecting text: {}", transcription);
-                    let inject_result = tokio::task::spawn_blocking(move || {
-                        let mut injector =
-                            TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
-                        injector.inject_text_clipboard(&transcription)
-                            .map_err(|e| format!("Failed to inject text: {}", e))
-                    })
-                    .await
-                    .map_err(|e| format!("Injection task failed: {}", e))?;
-
-                    match &inject_result {
-                        Ok(_) => log::info!("Text injected successfully"),
-                        Err(e) => log::error!("Text injection failed: {}", e),
-                    }
-                    inject_result?;
-                    let _ = app.emit("text-injected", ());
-                }
-
-                indicator_done(&app);
-                Ok(state.last_transcription.read().clone())
-            } else {
-                // English: OpenAI Realtime handles transcription via callback
-                state.openai_audio_tx.write().take();
-                capture.clear_stream_sender();
-                log::info!("Recording stopped (OpenAI). Transcription handled via WebSocket callback.");
-                Ok(String::new())
+                    .ok_or_else(|| "Default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
+                
+                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+            }
+            EnglishEndpointType::CustomRunPod => {
+                let rp_key = settings.english_custom_runpod_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "Custom RunPod API key for English not set. Go to Settings to add it.".to_string())?;
+                let rp_endpoint = settings.english_custom_runpod_endpoint_id
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "Custom RunPod Endpoint ID for English not set. Go to Settings to add it.".to_string())?;
+                
+                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+            }
+            EnglishEndpointType::OpenAI => {
+                let openai_key = settings.english_openai_api_key
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| "OpenAI API key not set. Go to Settings to add it.".to_string())?;
+                
+                let wav_bytes = encode_wav(&samples, 16000);
+                transcribe_english(&openai_key, &wav_bytes).await?
             }
         }
-        TranscriptionEngine::LocalWhisper => {
-            if samples.is_empty() {
-                log::warn!("No audio samples captured");
-                return Ok(String::new());
-            }
+    };
 
-            log::info!("Captured {} audio samples", samples.len());
+    log::info!("{} transcription: {}", language, transcription);
+    *state.last_transcription.write() = transcription.clone();
+    let _ = app.emit("transcription-complete", &transcription);
 
-            // Transcribe - update indicator to show transcribing state
-            let _ = app.emit("transcribing", ());
-            indicator_transcribing(&app);
+    if !transcription.is_empty() {
+        log::info!("Injecting text: {}", transcription);
+        let inject_result = tokio::task::spawn_blocking(move || {
+            let mut injector = TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
+            injector.inject_text_clipboard(&transcription)
+                .map_err(|e| format!("Failed to inject text: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Injection task failed: {}", e))?;
 
-            let transcription = {
-                let transcriber_guard = state.transcriber.read();
-                let transcriber = transcriber_guard
-                    .as_ref()
-                    .ok_or_else(|| "Transcriber not initialized".to_string())?;
-
-                transcriber
-                    .transcribe(&samples)
-                    .map_err(|e| format!("Transcription failed: {}", e))?
-            };
-
-            log::info!("Transcription: {}", transcription);
-
-            // Store last transcription
-            *state.last_transcription.write() = transcription.clone();
-
-            // Emit completion event
-            let _ = app.emit("transcription-complete", &transcription);
-
-            // Inject text at cursor if not empty
-            if !transcription.is_empty() {
-                log::info!("Injecting text: {}", transcription);
-
-                let inject_result = tokio::task::spawn_blocking(move || {
-                    let mut injector =
-                        TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
-                    injector.inject_text_clipboard(&transcription)
-                        .map_err(|e| format!("Failed to inject text: {}", e))
-                })
-                .await
-                .map_err(|e| format!("Injection task failed: {}", e))?;
-
-                match &inject_result {
-                    Ok(_) => log::info!("Text injected successfully"),
-                    Err(e) => log::error!("Text injection failed: {}", e),
-                }
-                inject_result?;
-
-                let _ = app.emit("text-injected", ());
-            }
-
-            Ok(state.last_transcription.read().clone())
+        match &inject_result {
+            Ok(_) => log::info!("Text injected successfully"),
+            Err(e) => log::error!("Text injection failed: {}", e),
         }
+        inject_result?;
+        let _ = app.emit("text-injected", ());
     }
+
+    indicator_done(&app);
+    Ok(state.last_transcription.read().clone())
 }
 
 /// Get current settings
@@ -538,7 +345,7 @@ fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
             } else {
                 return;
             };
-            let _ = app_en.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+            let _ = app_en.emit("hotkey-event", &event);
         });
         log::info!("Registered modifier English hotkey: {:?}", modifier);
     }
@@ -557,7 +364,7 @@ fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
             } else {
                 return;
             };
-            let _ = app_he.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+            let _ = app_he.emit("hotkey-event", &event);
         });
         log::info!("Registered modifier Hebrew hotkey: {:?}", modifier);
     }
@@ -625,27 +432,45 @@ async fn validate_runpod_key(api_key: String, endpoint_id: String) -> Result<boo
     }
     Ok(validate_runpod(&api_key, &endpoint_id).await)
 }
-
-/// Run a bundled transcription test against the configured paid endpoints.
+/// Run a bundled transcription test against the configured endpoints.
 #[tauri::command]
 async fn run_transcription_test(language: String, state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.get_settings();
 
     match language.to_lowercase().as_str() {
         "en" => {
-            let api_key = settings
-                .openai_api_key
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| "OpenAI API key not set".to_string())?;
-            transcribe_english_test(&api_key, english_test_wav()).await
+            match settings.english_endpoint_type {
+                settings::EnglishEndpointType::SharedRunPod => {
+                    let rp_key = settings.runpod_api_key
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| "Default RunPod API key not set".to_string())?;
+                    let rp_endpoint = settings.runpod_endpoint_id
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| "Default RunPod Endpoint ID not set".to_string())?;
+                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en").await
+                }
+                settings::EnglishEndpointType::CustomRunPod => {
+                    let rp_key = settings.english_custom_runpod_api_key
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| "Custom RunPod API key for English not set".to_string())?;
+                    let rp_endpoint = settings.english_custom_runpod_endpoint_id
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| "Custom RunPod Endpoint ID for English not set".to_string())?;
+                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en").await
+                }
+                settings::EnglishEndpointType::OpenAI => {
+                    let api_key = settings.english_openai_api_key
+                        .filter(|k| !k.is_empty())
+                        .ok_or_else(|| "OpenAI API key not set".to_string())?;
+                    transcribe_english(&api_key, english_test_wav()).await
+                }
+            }
         }
         "he" => {
-            let rp_key = settings
-                .runpod_api_key
+            let rp_key = settings.runpod_api_key
                 .filter(|k| !k.is_empty())
                 .ok_or_else(|| "RunPod API key not set".to_string())?;
-            let rp_endpoint = settings
-                .runpod_endpoint_id
+            let rp_endpoint = settings.runpod_endpoint_id
                 .filter(|k| !k.is_empty())
                 .ok_or_else(|| "RunPod Endpoint ID not set".to_string())?;
             transcribe_hebrew_wav(&rp_key, &rp_endpoint, hebrew_test_wav()).await
@@ -654,38 +479,12 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
     }
 }
 
-/// Set recording mode
-#[tauri::command]
-fn set_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut settings = state.get_settings();
-    settings.recording_mode = match mode.to_lowercase().as_str() {
-        "live" => RecordingMode::Live,
-        "batch" => RecordingMode::Batch,
-        _ => return Err(format!("Unknown mode: {}", mode)),
-    };
 
-    let store = state.settings_store.read();
-    store.update(settings).map_err(|e| e.to_string())
-}
 
 /// Get last transcription
 #[tauri::command]
 fn get_last_transcription(state: State<'_, AppState>) -> String {
     state.last_transcription.read().clone()
-}
-
-/// Check if model exists
-#[tauri::command]
-fn check_model_exists(state: State<'_, AppState>) -> bool {
-    state.get_model_path().is_some()
-}
-
-/// Get model directory path
-#[tauri::command]
-fn get_models_dir() -> String {
-    SettingsStore::get_models_dir()
-        .to_string_lossy()
-        .to_string()
 }
 
 /// Check if currently recording
@@ -706,88 +505,6 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
         autostart_manager.disable().map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-/// Get model status for all sizes
-#[tauri::command]
-fn get_model_status() -> Vec<serde_json::Value> {
-    use serde_json::json;
-    
-    vec![
-        json!({
-            "size": "tiny",
-            "name": "Tiny",
-            "description": "Fastest, least accurate",
-            "size_mb": models::model_size_mb(ModelSize::Tiny),
-            "downloaded": models::model_exists(ModelSize::Tiny)
-        }),
-        json!({
-            "size": "base",
-            "name": "Base",
-            "description": "Balanced speed/accuracy",
-            "size_mb": models::model_size_mb(ModelSize::Base),
-            "downloaded": models::model_exists(ModelSize::Base)
-        }),
-        json!({
-            "size": "small",
-            "name": "Small",
-            "description": "Better accuracy",
-            "size_mb": models::model_size_mb(ModelSize::Small),
-            "downloaded": models::model_exists(ModelSize::Small)
-        }),
-        json!({
-            "size": "medium",
-            "name": "Medium",
-            "description": "High accuracy",
-            "size_mb": models::model_size_mb(ModelSize::Medium),
-            "downloaded": models::model_exists(ModelSize::Medium)
-        }),
-        json!({
-            "size": "large",
-            "name": "Large",
-            "description": "Best accuracy, slowest",
-            "size_mb": models::model_size_mb(ModelSize::Large),
-            "downloaded": models::model_exists(ModelSize::Large)
-        }),
-    ]
-}
-
-/// Download a specific model
-#[tauri::command]
-async fn download_model(app: AppHandle, size: String) -> Result<String, String> {
-    let model_size = match size.as_str() {
-        "tiny" => ModelSize::Tiny,
-        "base" => ModelSize::Base,
-        "small" => ModelSize::Small,
-        "medium" => ModelSize::Medium,
-        "large" => ModelSize::Large,
-        _ => return Err(format!("Unknown model size: {}", size)),
-    };
-    
-    // Check if already downloaded
-    if models::model_exists(model_size) {
-        return Ok(models::model_path(model_size).to_string_lossy().to_string());
-    }
-    
-    let app_handle = app.clone();
-    let size_for_progress = size.clone();
-    let path = models::download_model(model_size, Some(move |downloaded, total| {
-        let progress = if total > 0 {
-            (downloaded as f64 / total as f64 * 100.0) as u32
-        } else {
-            0
-        };
-        let _ = app_handle.emit("model-download-progress", serde_json::json!({
-            "size": size_for_progress,
-            "downloaded": downloaded,
-            "total": total,
-            "progress": progress
-        }));
-    }))
-    .await?;
-    
-    let _ = app.emit("model-download-complete", &size);
-    Ok(path.to_string_lossy().to_string())
 }
 
 // ============================================================================
@@ -967,14 +684,9 @@ pub fn run() {
             stop_recording,
             get_settings,
             save_settings,
-            set_mode,
             get_last_transcription,
-            check_model_exists,
-            get_models_dir,
             is_recording,
             set_autostart,
-            get_model_status,
-            download_model,
             validate_openai_key,
             validate_runpod_key,
             run_transcription_test,
@@ -1056,7 +768,7 @@ pub fn run() {
                             return; // Toggle mode only responds to press
                         };
                         log::info!("Emitting hotkey event: {:?}", event);
-                        let _ = app_clone.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+                        let _ = app_clone.emit("hotkey-event", &event);
                     });
                 }
                 
@@ -1078,7 +790,7 @@ pub fn run() {
                             return; // Toggle mode only responds to press
                         };
                         log::info!("Emitting hotkey event: {:?}", event);
-                        let _ = app_clone.emit("hotkey-event", serde_json::to_string(&event).unwrap());
+                        let _ = app_clone.emit("hotkey-event", &event);
                     });
                 }
                 
@@ -1100,17 +812,14 @@ pub fn run() {
                             HotkeyEvent::RecordingStart { language } => {
                                 log::info!("Hotkey: Start recording in {}", language);
                                 let state = app.state::<AppState>();
-                                if !*state.is_recording.read() {
-                                    // Store current recording language
-                                    *state.recording_language.write() = language.clone();
 
-                                    // Start the microphone *immediately* so the
-                                    // OS begins capturing audio within a few ms
-                                    // of the hotkey press. The transcriber /
-                                    // network session is set up afterwards; any
-                                    // audio captured in the meantime is
-                                    // buffered and flushed to the session once
-                                    // it is ready.
+                                // Store current recording language
+                                *state.recording_language.write() = language.clone();
+
+                                // Start the microphone if not already running
+                                // (prewarm_capture may have already started it
+                                // and set is_recording = true).
+                                if !*state.is_recording.read() {
                                     match state.get_audio_capture() {
                                         Ok(capture) => {
                                             if !capture.is_recording() {
@@ -1123,9 +832,9 @@ pub fn run() {
                                                     let _ = app.emit("error", e.to_string());
                                                     return;
                                                 }
-                                                *state.is_recording.write() = true;
-                                                let _ = app.emit("recording-started", ());
                                             }
+                                            *state.is_recording.write() = true;
+                                            let _ = app.emit("recording-started", ());
                                         }
                                         Err(e) => {
                                             log::error!("No audio capture: {}", e);
@@ -1133,33 +842,24 @@ pub fn run() {
                                             return;
                                         }
                                     }
-
-                                    // Show indicator after mic is live
-                                    show_indicator(&app, &language);
-
-                                    let settings = state.get_settings();
-
-                                    // For local whisper, load the correct model for the language
-                                    if settings.transcription_engine == TranscriptionEngine::LocalWhisper {
-                                        if let Err(e) = state.ensure_transcriber_for_language(&language) {
-                                            log::error!("Failed to load transcriber: {}", e);
-                                            let _ = app.emit("error", e);
-                                            hide_indicator(&app);
-                                            return;
-                                        }
-                                    }
-
-                                    let _ = app.emit("language-changed", &language);
-
-                                    tauri::async_runtime::spawn(async move {
-                                        let state = app.state::<AppState>();
-                                        if let Err(e) = start_recording(state, app.clone()).await {
-                                            log::error!("Failed to start recording: {}", e);
-                                            let _ = app.emit("error", e);
-                                            hide_indicator(&app);
-                                        }
-                                    });
                                 }
+
+                                // Show indicator after mic is live
+                                show_indicator(&app, &language);
+
+                                let _ = app.emit("language-changed", &language);
+
+                                // Spawn the session setup (WebSocket connect, etc.).
+                                // start_recording is idempotent — it handles
+                                // the case where mic capture is already running.
+                                tauri::async_runtime::spawn(async move {
+                                    let state = app.state::<AppState>();
+                                    if let Err(e) = start_recording(state, app.clone()).await {
+                                        log::error!("Failed to start recording: {}", e);
+                                        let _ = app.emit("error", e);
+                                        hide_indicator(&app);
+                                    }
+                                });
                             }
                             HotkeyEvent::RecordingStop => {
                                 log::info!("Hotkey: Stop recording");
@@ -1170,12 +870,20 @@ pub fn run() {
                                     
                                     tauri::async_runtime::spawn(async move {
                                         let state = app.state::<AppState>();
-                                        if let Err(e) = stop_recording(state, app.clone()).await {
-                                            log::error!("Failed to stop recording: {}", e);
-                                            let _ = app.emit("error", e);
+                                        match stop_recording(state, app.clone()).await {
+                                            Ok(transcription) => {
+                                                if !transcription.is_empty() {
+                                                    hide_indicator(&app);
+                                                } else {
+                                                    hide_indicator(&app);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to stop recording: {}", e);
+                                                let _ = app.emit("error", e);
+                                                hide_indicator(&app);
+                                            }
                                         }
-                                        // Hide indicator after transcription completes
-                                        hide_indicator(&app);
                                     });
                                 }
                             }
@@ -1196,9 +904,8 @@ pub fn run() {
                 }
             });
 
-            // Ensure config directories exist
+            // Ensure config directory exists
             let _ = std::fs::create_dir_all(SettingsStore::get_config_dir());
-            let _ = std::fs::create_dir_all(SettingsStore::get_models_dir());
 
             // Apply start_minimized setting
             let state = app.state::<AppState>();

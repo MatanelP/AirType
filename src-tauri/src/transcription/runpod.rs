@@ -30,6 +30,10 @@ struct TranscribeArgs {
     blob: String,
     language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     output_options: Option<OutputOptions>,
 }
 
@@ -86,6 +90,18 @@ pub async fn transcribe_audio_wav(
     let duration = data_len as f64 / 2.0 / 16000.0;
     log::info!("Sending {:.1}s of {} audio to RunPod endpoint {}...", duration, language, endpoint_id);
 
+    let initial_prompt = if language == "en" {
+        Some("This is an English transcription. Please write the output in English script, using proper grammar and spelling.".to_string())
+    } else {
+        None
+    };
+
+    let task = if language == "en" {
+        "translate" // The translate task in Whisper forces output to English
+    } else {
+        "transcribe"
+    };
+
     let payload = RunPodRequest {
         input: RunPodInput {
             model: "ivrit-ai/whisper-large-v3-turbo-ct2".to_string(),
@@ -94,6 +110,8 @@ pub async fn transcribe_audio_wav(
             transcribe_args: TranscribeArgs {
                 blob,
                 language: language.to_string(),
+                task: Some(task.to_string()),
+                initial_prompt,
                 output_options: Some(OutputOptions {
                     word_timestamps: false,
                     extra_data: false,
@@ -227,7 +245,7 @@ pub async fn validate_runpod(api_key: &str, endpoint_id: &str) -> bool {
 }
 
 /// Encode f32 audio samples as a WAV file in memory
-fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let num_samples = samples.len() as u32;
     let bytes_per_sample = 2u16; // 16-bit PCM
     let num_channels = 1u16;

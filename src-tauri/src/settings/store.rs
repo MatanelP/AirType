@@ -11,9 +11,9 @@ use std::sync::Arc;
 const APP_NAME: &str = "airtype";
 const SECRET_SERVICE_NAME: &str = "airtype";
 const SETTINGS_FILENAME: &str = "settings.json";
-const MODELS_DIR_NAME: &str = "models";
-const OPENAI_API_KEY_ENTRY: &str = "openai_api_key";
+const OPENAI_API_KEY_ENTRY: &str = "english_openai_api_key";
 const RUNPOD_API_KEY_ENTRY: &str = "runpod_api_key";
+const CUSTOM_RUNPOD_API_KEY_ENTRY: &str = "english_custom_runpod_api_key";
 
 /// Thread-safe settings store with automatic persistence.
 #[derive(Debug, Clone)]
@@ -38,11 +38,6 @@ impl SettingsStore {
         // Ensure config directory exists
         fs::create_dir_all(&config_dir)
             .with_context(|| format!("Failed to create config directory: {:?}", config_dir))?;
-
-        // Ensure models directory exists
-        let models_dir = Self::get_models_dir();
-        fs::create_dir_all(&models_dir)
-            .with_context(|| format!("Failed to create models directory: {:?}", models_dir))?;
 
         // Load settings or use defaults
         let settings = Self::load_from_path(&config_dir).unwrap_or_else(|e| {
@@ -75,11 +70,6 @@ impl SettingsStore {
             .join(APP_NAME)
     }
 
-    /// Get the models directory within the config directory.
-    pub fn get_models_dir() -> PathBuf {
-        Self::get_config_dir().join(MODELS_DIR_NAME)
-    }
-
     /// Get the path to the settings file.
     pub fn get_settings_path() -> PathBuf {
         Self::get_config_dir().join(SETTINGS_FILENAME)
@@ -102,16 +92,20 @@ impl SettingsStore {
             serde_json::from_str(&contents).with_context(|| "Failed to parse settings JSON")?;
 
         if let Some(secret) = Self::read_secret(OPENAI_API_KEY_ENTRY)? {
-            settings.openai_api_key = Some(secret);
+            settings.english_openai_api_key = Some(secret);
         }
         if let Some(secret) = Self::read_secret(RUNPOD_API_KEY_ENTRY)? {
             settings.runpod_api_key = Some(secret);
         }
+        if let Some(secret) = Self::read_secret(CUSTOM_RUNPOD_API_KEY_ENTRY)? {
+            settings.english_custom_runpod_api_key = Some(secret);
+        }
 
         log::info!(
-            "Loaded settings secrets: openai_present={}, runpod_present={}",
-            settings.openai_api_key.is_some(),
-            settings.runpod_api_key.is_some()
+            "Loaded settings secrets: openai_present={}, runpod_present={}, custom_runpod_present={}",
+            settings.english_openai_api_key.is_some(),
+            settings.runpod_api_key.is_some(),
+            settings.english_custom_runpod_api_key.is_some()
         );
 
         Ok(settings)
@@ -122,18 +116,21 @@ impl SettingsStore {
         let settings_path = self.config_dir.join(SETTINGS_FILENAME);
 
         log::info!(
-            "Saving settings: openai_present={}, runpod_present={}, path={:?}",
-            settings.openai_api_key.is_some(),
+            "Saving settings: openai_present={}, runpod_present={}, custom_runpod_present={}, path={:?}",
+            settings.english_openai_api_key.is_some(),
             settings.runpod_api_key.is_some(),
+            settings.english_custom_runpod_api_key.is_some(),
             settings_path
         );
 
-        Self::persist_secret(OPENAI_API_KEY_ENTRY, settings.openai_api_key.as_deref())?;
+        Self::persist_secret(OPENAI_API_KEY_ENTRY, settings.english_openai_api_key.as_deref())?;
         Self::persist_secret(RUNPOD_API_KEY_ENTRY, settings.runpod_api_key.as_deref())?;
+        Self::persist_secret(CUSTOM_RUNPOD_API_KEY_ENTRY, settings.english_custom_runpod_api_key.as_deref())?;
 
         let mut disk_settings = settings.clone();
-        disk_settings.openai_api_key = None;
+        disk_settings.english_openai_api_key = None;
         disk_settings.runpod_api_key = None;
+        disk_settings.english_custom_runpod_api_key = None;
 
         let json = serde_json::to_string_pretty(&disk_settings)
             .with_context(|| "Failed to serialize settings")?;
@@ -243,17 +240,6 @@ impl SettingsStore {
     pub fn reset(&self) -> Result<()> {
         self.update(Settings::default())
     }
-
-    /// Get the effective model path (custom path or default based on model size).
-    pub fn get_effective_model_path(&self) -> PathBuf {
-        let settings = self.settings.read();
-
-        if let Some(ref custom_path) = settings.model_path {
-            custom_path.clone()
-        } else {
-            Self::get_models_dir().join(settings.model_size.filename())
-        }
-    }
 }
 
 impl Default for SettingsStore {
@@ -265,7 +251,7 @@ impl Default for SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{HotkeyMode, ModelSize};
+    use crate::settings::{HotkeyMode, EnglishEndpointType};
     use tempfile::TempDir;
 
     fn with_temp_config<F>(f: F)
@@ -299,17 +285,12 @@ mod tests {
                 hotkey_english: "Alt+E".to_string(),
                 hotkey_hebrew: "Alt+H".to_string(),
                 hotkey_mode: HotkeyMode::Toggle,
-                recording_mode: super::super::RecordingMode::Live,
-                transcription_engine: super::super::TranscriptionEngine::default(),
-                english_engine: super::super::EnglishEngine::default(),
-                openai_api_key: None,
+                runpod_endpoint_id: Some("hebrew-runpod".to_string()),
                 runpod_api_key: None,
-                runpod_endpoint_id: None,
-                openai_realtime_model: None,
-                openai_realtime_base_url: None,
-                live_transcription: true,
-                model_path: Some(PathBuf::from("/custom/model.bin")),
-                model_size: ModelSize::Small,
+                english_endpoint_type: EnglishEndpointType::OpenAI,
+                english_custom_runpod_endpoint_id: None,
+                english_custom_runpod_api_key: None,
+                english_openai_api_key: None,
                 start_minimized: true,
                 start_on_login: true,
                 inject_delay_ms: 50,
@@ -326,8 +307,7 @@ mod tests {
             assert_eq!(loaded.hotkey_english, "Alt+E");
             assert_eq!(loaded.hotkey_hebrew, "Alt+H");
             assert_eq!(loaded.hotkey_mode, HotkeyMode::Toggle);
-            assert!(loaded.live_transcription);
-            assert_eq!(loaded.model_size, ModelSize::Small);
+            assert_eq!(loaded.english_endpoint_type, EnglishEndpointType::OpenAI);
             assert!(loaded.start_minimized);
             assert!(loaded.start_on_login);
             assert_eq!(loaded.inject_delay_ms, 50);
@@ -343,9 +323,7 @@ mod tests {
         assert!(json.contains("hotkey_english"));
         assert!(json.contains("hotkey_hebrew"));
         assert!(json.contains("hotkey_mode"));
-        assert!(json.contains("recording_mode"));
-        assert!(json.contains("live_transcription"));
-        assert!(json.contains("model_size"));
+        assert!(json.contains("english_endpoint_type"));
         assert!(json.contains("start_minimized"));
         assert!(json.contains("start_on_login"));
         assert!(json.contains("inject_delay_ms"));
@@ -354,15 +332,18 @@ mod tests {
     #[test]
     fn test_sensitive_settings_not_serialized() {
         let settings = Settings {
-            openai_api_key: Some("openai-secret".to_string()),
+            english_openai_api_key: Some("openai-secret".to_string()),
             runpod_api_key: Some("runpod-secret".to_string()),
+            english_custom_runpod_api_key: Some("custom-runpod-secret".to_string()),
             ..Settings::default()
         };
 
         let json = serde_json::to_string_pretty(&settings).unwrap();
-        assert!(json.contains("openai-secret"));
-        assert!(json.contains("runpod-secret"));
-        assert!(json.contains("openai_api_key"));
+        assert!(!json.contains("openai-secret"));
+        assert!(!json.contains("runpod-secret"));
+        assert!(!json.contains("custom-runpod-secret"));
+        assert!(json.contains("english_openai_api_key"));
         assert!(json.contains("runpod_api_key"));
+        assert!(json.contains("english_custom_runpod_api_key"));
     }
 }

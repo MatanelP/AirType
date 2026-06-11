@@ -28,15 +28,11 @@
   let indicatorState = $state('idle'); // idle, recording, transcribing, done
   let needsAccessibility = $state(false);
   
-  // Settings
   let settings = $state({
     language: 'en',
-    mode: 'batch',
-    model_size: 'base',
     hotkey_english: 'Ctrl+Shift+E',
     hotkey_hebrew: 'Ctrl+Shift+H',
     hotkey_mode: 'hold',
-    live_transcription: false,
     start_minimized: false,
     start_on_login: false,
   });
@@ -49,7 +45,7 @@
   
   // Derived values
   let languageLabel = $derived(settings.language === 'en' ? 'EN' : 'HE');
-  let modeLabel = $derived(settings.live_transcription ? 'Live' : 'Batch');
+  let modeLabel = $derived('Batch');
   let showTestButtons = $derived(dev);
   
   // Load settings on mount

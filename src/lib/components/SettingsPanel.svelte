@@ -16,9 +16,6 @@
   let isSaving = $state(false);
   let saveTimeout = $state(null);
   let recordingHotkeyFor = $state(null);
-  let modelStatus = $state([]);
-  let downloadingModel = $state(null);
-  let downloadProgress = $state(0);
   let showApiKey = $state(false);
   let keyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
   let appVersion = $state('');
@@ -31,38 +28,12 @@
   $effect(() => {
     if (isOpen) {
       refreshSettings();
-      loadModelStatus();
     }
   });
 
   onMount(() => {
-    let unlisteners = [];
-
     getVersion().then((v) => { appVersion = v; }).catch(() => {});
-    
-    (async () => {
-      unlisteners.push(await listen('model-download-progress', (event) => {
-        const data = event.payload;
-        downloadProgress = data.progress;
-      }));
-      
-      unlisteners.push(await listen('model-download-complete', () => {
-        downloadingModel = null;
-        downloadProgress = 0;
-        loadModelStatus();
-      }));
-    })();
-    
-    return () => unlisteners.forEach(fn => fn());
   });
-
-  async function loadModelStatus() {
-    try {
-      modelStatus = await invoke('get_model_status');
-    } catch (e) {
-      console.error('Failed to load model status:', e);
-    }
-  }
 
   async function refreshSettings() {
     try {
@@ -74,16 +45,6 @@
     }
   }
 
-  async function downloadModel(size) {
-    downloadingModel = size;
-    downloadProgress = 0;
-    try {
-      await invoke('download_model', { size });
-    } catch (e) {
-      console.error('Failed to download model:', e);
-      downloadingModel = null;
-    }
-  }
 
   let keyValidateTimeout = null;
   let rpKeyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
@@ -172,13 +133,6 @@
         await invoke('set_autostart', { enabled: value });
       } catch (e) {
         console.error('Failed to set autostart:', e);
-      }
-    }
-    
-    if (key === 'model_size') {
-      const model = modelStatus.find(m => m.size === value);
-      if (model && !model.downloaded) {
-        downloadModel(value);
       }
     }
     
@@ -374,28 +328,110 @@
         </section>
         
         <section class="settings-section">
-          <h3>Transcription Engine</h3>
+          <h3>Endpoints</h3>
+          <p class="section-note">
+            Configure the APIs used for speech recognition. Both Hebrew and English use batch transcription.
+          </p>
           
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label">Engine</span>
-              <span class="setting-desc">Local Whisper is free & offline. OpenAI streams text live.</span>
+              <span class="setting-label">Default RunPod API Key</span>
+              <span class="setting-desc">Used for Hebrew (and English if shared)</span>
             </div>
-            <select 
+            <div class="api-key-input">
+              <input 
+                type={showRpKey ? 'text' : 'password'}
+                class="text-input"
+                class:input-valid={rpKeyValidation === 'valid'}
+                class:input-invalid={rpKeyValidation === 'invalid'}
+                placeholder="rp_..."
+                value={localSettings.runpod_api_key || ''}
+                oninput={(e) => handleRpKeyChange(e.target.value)}
+              />
+              <button class="icon-btn" onclick={() => showRpKey = !showRpKey} aria-label="Toggle visibility">
+                {showRpKey ? '🙈' : '👁'}
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Default RunPod Endpoint ID</span>
+              <span class="setting-desc">Deploy ivrit-ai from <a href="https://www.runpod.io/console/hub/ivrit-ai/runpod-serverless" target="_blank" style="color: var(--accent)">RunPod Hub</a></span>
+            </div>
+            <div class="api-key-input">
+              <input 
+                type="text"
+                class="text-input"
+                class:input-valid={rpKeyValidation === 'valid'}
+                class:input-invalid={rpKeyValidation === 'invalid'}
+                placeholder="e.g. abc123xyz"
+                value={localSettings.runpod_endpoint_id || ''}
+                oninput={(e) => handleRpEndpointChange(e.target.value)}
+              />
+            </div>
+          </div>
+          {#if rpKeyValidation === 'checking'}
+            <p class="key-status checking">⏳ Validating RunPod endpoint...</p>
+          {:else if rpKeyValidation === 'valid'}
+            <p class="key-status valid">✓ RunPod endpoint is reachable</p>
+          {:else if rpKeyValidation === 'invalid'}
+            <p class="key-status invalid">✗ Cannot reach endpoint — check API key and endpoint ID</p>
+          {/if}
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">English Endpoint</span>
+              <span class="setting-desc">Which endpoint to use for English dictation</span>
+            </div>
+            <select
               class="select-input"
-              value={localSettings.transcription_engine || 'localwhisper'}
-              onchange={(e) => updateSetting('transcription_engine', e.target.value)}
+              value={localSettings.english_endpoint_type || 'sharedrunpod'}
+              onchange={(e) => updateSetting('english_endpoint_type', e.target.value)}
             >
-              <option value="localwhisper">Local Whisper (free, offline)</option>
-              <option value="openai">OpenAI (paid, live)</option>
+              <option value="sharedrunpod">Same as Hebrew (RunPod)</option>
+              <option value="customrunpod">Custom RunPod Endpoint</option>
+              <option value="openai">OpenAI (Whisper)</option>
             </select>
           </div>
-          
-          {#if localSettings.transcription_engine === 'openai'}
+
+          {#if localSettings.english_endpoint_type === 'customrunpod'}
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Custom RunPod API Key</span>
+                <span class="setting-desc">RunPod API Key for English</span>
+              </div>
+              <div class="api-key-input">
+                <input 
+                  type="password"
+                  class="text-input"
+                  placeholder="rp_..."
+                  value={localSettings.english_custom_runpod_api_key || ''}
+                  oninput={(e) => updateSetting('english_custom_runpod_api_key', e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-label">Custom RunPod Endpoint ID</span>
+                <span class="setting-desc">E.g., another Whisper or ivrit-ai endpoint</span>
+              </div>
+              <div class="api-key-input">
+                <input 
+                  type="text"
+                  class="text-input"
+                  placeholder="e.g. def456uvw"
+                  value={localSettings.english_custom_runpod_endpoint_id || ''}
+                  oninput={(e) => updateSetting('english_custom_runpod_endpoint_id', e.target.value)}
+                />
+              </div>
+            </div>
+          {:else if localSettings.english_endpoint_type === 'openai'}
             <div class="setting-row">
               <div class="setting-info">
                 <span class="setting-label">OpenAI API Key</span>
-                <span class="setting-desc">For English live transcription (gpt-4o-transcribe)</span>
+                <span class="setting-desc">For English Whisper-1 transcription</span>
               </div>
               <div class="api-key-input">
                 <input 
@@ -404,8 +440,12 @@
                   class:input-valid={keyValidation === 'valid'}
                   class:input-invalid={keyValidation === 'invalid'}
                   placeholder="sk-..."
-                  value={localSettings.openai_api_key || ''}
-                  oninput={(e) => handleApiKeyChange(e.target.value)}
+                  value={localSettings.english_openai_api_key || ''}
+                  oninput={(e) => {
+                    updateSetting('english_openai_api_key', e.target.value);
+                    if (keyValidateTimeout) clearTimeout(keyValidateTimeout);
+                    keyValidateTimeout = setTimeout(() => validateApiKey(e.target.value), 800);
+                  }}
                 />
                 <button class="icon-btn" onclick={() => showApiKey = !showApiKey} aria-label="Toggle visibility">
                   {showApiKey ? '🙈' : '👁'}
@@ -419,111 +459,6 @@
             {:else if keyValidation === 'invalid'}
               <p class="key-status invalid">✗ Invalid API key</p>
             {/if}
-            
-            <div class="setting-row">
-              <div class="setting-info">
-                <span class="setting-label">RunPod API Key</span>
-                <span class="setting-desc">For Hebrew transcription (ivrit-ai via RunPod Serverless)</span>
-              </div>
-              <div class="api-key-input">
-                <input 
-                  type={showRpKey ? 'text' : 'password'}
-                  class="text-input"
-                  class:input-valid={rpKeyValidation === 'valid'}
-                  class:input-invalid={rpKeyValidation === 'invalid'}
-                  placeholder="rp_..."
-                  value={localSettings.runpod_api_key || ''}
-                  oninput={(e) => handleRpKeyChange(e.target.value)}
-                />
-                <button class="icon-btn" onclick={() => showRpKey = !showRpKey} aria-label="Toggle visibility">
-                  {showRpKey ? '🙈' : '👁'}
-                </button>
-              </div>
-            </div>
-
-            <div class="setting-row">
-              <div class="setting-info">
-                <span class="setting-label">RunPod Endpoint ID</span>
-                <span class="setting-desc">Deploy ivrit-ai from <a href="https://www.runpod.io/console/hub/ivrit-ai/runpod-serverless" target="_blank" style="color: var(--accent)">RunPod Hub</a></span>
-              </div>
-              <div class="api-key-input">
-                <input 
-                  type="text"
-                  class="text-input"
-                  class:input-valid={rpKeyValidation === 'valid'}
-                  class:input-invalid={rpKeyValidation === 'invalid'}
-                  placeholder="e.g. abc123xyz"
-                  value={localSettings.runpod_endpoint_id || ''}
-                  oninput={(e) => handleRpEndpointChange(e.target.value)}
-                />
-              </div>
-            </div>
-            {#if rpKeyValidation === 'checking'}
-              <p class="key-status checking">⏳ Validating RunPod endpoint...</p>
-            {:else if rpKeyValidation === 'valid'}
-              <p class="key-status valid">✓ RunPod endpoint is reachable</p>
-            {:else if rpKeyValidation === 'invalid'}
-              <p class="key-status invalid">✗ Cannot reach endpoint — check API key and endpoint ID</p>
-            {/if}
-            
-            <p class="section-note">
-              <strong>English</strong>: Live streaming via OpenAI (text appears as you speak).<br/>
-              <strong>Hebrew</strong>: Best-in-class ivrit-ai model via RunPod Serverless (pay-per-second, text after recording).
-            </p>
-
-            <div class="setting-row">
-              <div class="setting-info">
-                <span class="setting-label">English Engine</span>
-                <span class="setting-desc">OpenAI: live streaming. RunPod: batch via same endpoint as Hebrew.</span>
-              </div>
-              <select
-                class="select-input"
-                value={localSettings.english_engine || 'openai'}
-                onchange={(e) => updateSetting('english_engine', e.target.value)}
-              >
-                <option value="openai">OpenAI Realtime (live)</option>
-                <option value="runpod">RunPod Whisper (batch)</option>
-              </select>
-            </div>
-
-            {#if (localSettings.english_engine || 'openai') === 'openai'}
-              <div class="setting-row">
-                <div class="setting-info">
-                  <span class="setting-label">OpenAI Model</span>
-                  <span class="setting-desc">Transcription model. Mini is cheaper; diarize adds speaker labels.</span>
-                </div>
-                <select
-                  class="select-input"
-                  value={localSettings.openai_realtime_model || 'gpt-4o-transcribe'}
-                  onchange={(e) => updateSetting('openai_realtime_model', e.target.value)}
-                >
-                  <option value="gpt-4o-transcribe">gpt-4o-transcribe (best)</option>
-                  <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe (cheaper)</option>
-                  <option value="gpt-4o-transcribe-diarize">gpt-4o-transcribe-diarize (speaker labels)</option>
-                  <option value="gpt-realtime-whisper">gpt-realtime-whisper</option>
-                </select>
-              </div>
-
-              <!-- Advanced: custom base URL (hidden by default) -->
-              <details class="advanced-details">
-                <summary class="advanced-summary">Advanced</summary>
-                <div class="setting-row" style="border-bottom:none; padding-top:0.5rem">
-                  <div class="setting-info">
-                    <span class="setting-label">WebSocket Base URL</span>
-                    <span class="setting-desc">Override for Azure OpenAI or custom endpoints. Leave blank for default.</span>
-                  </div>
-                  <input
-                    type="text"
-                    class="text-input"
-                    placeholder="wss://api.openai.com/v1/realtime"
-                    value={localSettings.openai_realtime_base_url || ''}
-                    oninput={(e) => updateSetting('openai_realtime_base_url', e.target.value || null)}
-                  />
-                </div>
-              </details>
-            {/if}
-          {:else}
-            <p class="section-note">Text appears after you stop recording. No internet or API key needed.</p>
           {/if}
         </section>
         
@@ -545,53 +480,6 @@
             </select>
           </div>
         </section>
-        
-        {#if localSettings.transcription_engine !== 'openai'}
-        <section class="settings-section">
-          <h3>Local Models</h3>
-          
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">Whisper model</span>
-              <span class="setting-desc">Used for both English and Hebrew. Use <strong>small</strong> or larger for good Hebrew accuracy.</span>
-            </div>
-            <select 
-              class="select-input"
-              value={localSettings.model_size || 'base'}
-              onchange={(e) => updateSetting('model_size', e.target.value)}
-            >
-              {#each modelStatus as model}
-                <option value={model.size}>
-                  {model.size} ({model.size_mb}MB) {model.downloaded ? '✓' : ''}
-                </option>
-              {/each}
-              {#if modelStatus.length === 0}
-                <option value="tiny">tiny (75MB)</option>
-                <option value="base">base (150MB)</option>
-                <option value="small">small (500MB)</option>
-                <option value="medium">medium (1.5GB)</option>
-                <option value="large">large (3GB)</option>
-              {/if}
-            </select>
-          </div>
-          
-          {#if downloadingModel}
-            <div class="download-progress">
-              <span>Downloading {downloadingModel}...</span>
-              <div class="progress-bar">
-                <div class="progress-fill" style="width: {downloadProgress}%"></div>
-              </div>
-              <span class="progress-text">{downloadProgress.toFixed(0)}%</span>
-            </div>
-          {/if}
-          
-          <p class="section-note">
-            <strong>tiny/base</strong>: Fast, good for English.
-            <strong>small</strong>: Best balance — recommended for Hebrew.
-            <strong>medium/large</strong>: Most accurate but slow on CPU.
-          </p>
-        </section>
-        {/if}
         
         <section class="settings-section">
           <h3>System</h3>
