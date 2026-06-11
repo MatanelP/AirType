@@ -804,7 +804,16 @@ pub fn run() {
             let app_handle = app.handle().clone();
             app.listen("hotkey-event", move |event| {
                 log::info!("Received hotkey-event: {}", event.payload());
-                match serde_json::from_str::<HotkeyEvent>(event.payload()) {
+                let payload_str = event.payload();
+                // Tauri `emit` sometimes double-serializes objects from background threads
+                // into JSON strings, e.g. `"{\"type\":\"RecordingStop\"}"`. 
+                // We robustly try to parse the inner string first, falling back to raw payload.
+                let parsed_event: Result<HotkeyEvent, _> = match serde_json::from_str::<String>(payload_str) {
+                    Ok(inner_str) => serde_json::from_str(&inner_str),
+                    Err(_) => serde_json::from_str(payload_str),
+                };
+
+                match parsed_event {
                     Ok(hotkey_event) => {
                         log::info!("Parsed hotkey event: {:?}", hotkey_event);
                         let app = app_handle.clone();

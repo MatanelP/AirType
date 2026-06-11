@@ -219,12 +219,7 @@
   <!-- Title Bar -->
   <header class="title-bar" data-tauri-drag-region>
     <div class="app-name">
-      <svg class="app-logo" width="32" height="32" viewBox="0 -64 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="205" y="62" width="102" height="168" rx="51" fill="#5E8DA6"/>
-        <path d="M186,180 A70,70 0 0,0 326,180" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round" fill="none"/>
-        <line x1="256" y1="250" x2="256" y2="312" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round"/>
-        <line x1="220" y1="312" x2="292" y2="312" stroke="#5E8DA6" stroke-width="13" stroke-linecap="round"/>
-      </svg>
+      <img class="app-logo" src="/favicon.png" alt="AirType Logo" width="32" height="32" />
       AirType
     </div>
     <button class="settings-btn" onclick={() => settingsOpen = true} aria-label="Open settings">

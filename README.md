@@ -18,34 +18,22 @@ AirType is a lightweight desktop app that transcribes your voice and inserts the
 
 ## Features
 
-- **Global hotkeys** — record from any application with a single keypress (customizable)
-- **English and Hebrew** — dedicated hotkey and optimized model for each language
-- **Two transcription engines:**
-  - *Local Whisper* — free, offline, runs entirely on your machine
-  - *Cloud API* — OpenAI Realtime for English, RunPod ivrit-ai for Hebrew
-- **Floating indicator** — unobtrusive on-screen dot shows recording state
-- **System tray** — runs in the background with near-zero resource usage
-- **Auto-start** — optional launch on login
-- **Secure storage** — API keys are kept in the OS keychain, never in config files
+- **Global hotkeys** — record from any application with a single keypress.
+- **English and Hebrew** — dedicated hotkeys and endpoints configured for each language.
+- **Customizable Cloud Endpoints** — dynamically route English to OpenAI or a Custom RunPod endpoint, while strictly routing Hebrew to the `ivrit-ai` model.
+- **Floating indicator** — unobtrusive on-screen dot shows recording state.
+- **System tray** — runs in the background with near-zero resource usage.
+- **Auto-start** — optional launch on login.
+- **Secure storage** — API keys are kept in the OS keychain, never in config files.
 
 ## Transcription Engines
 
-### Cloud (API keys required)
+AirType uses robust Cloud API endpoints to ensure the highest transcription quality. 
 
-| | English | Hebrew |
-|---|---|---|
-| **Service** | OpenAI Realtime API | RunPod Serverless (ivrit-ai) |
-| **Model** | `gpt-4o-transcribe` | `ivrit-ai/whisper-large-v3-turbo-ct2` |
-| **Mode** | Live — text streams as you speak | Batch — text appears after you stop |
-| **Speed** | Real-time | ~2–5 s after recording stops |
-
-### Local Whisper (free, offline)
-
-| | English | Hebrew |
-|---|---|---|
-| **Model** | Selected Whisper model | Same model with Hebrew language hint |
-| **Mode** | Batch | Batch |
-| **Speed** | ~3–10 s depending on model size | ~3–10 s depending on model size |
+| Language | Default Endpoint | Alternative Endpoints | Mode |
+|---|---|---|---|
+| **Hebrew** | **RunPod** (ivrit-ai/whisper-large-v3-turbo-ct2) | — | Batch (~1-3s after stop) |
+| **English** | **Same as Hebrew (RunPod)** | **OpenAI** (Whisper), **Custom RunPod** | Batch (~1-3s after stop) |
 
 ### Recording modes
 
@@ -127,30 +115,18 @@ npm run tauri dev
 
 ## Setup
 
-### Local Whisper (free)
+### Endpoint Configuration
 
-No configuration required. A Whisper model is downloaded automatically on first use. You can change the model size in Settings:
-
-| Model | Download | Notes |
-|-------|----------|-------|
-| tiny | ~75 MB | Fastest, English only |
-| base | ~150 MB | Default — good for English |
-| **small** | **~466 MB** | **Recommended for English + Hebrew** |
-| medium | ~1.5 GB | Better accuracy, slower |
-| large | ~3 GB | Best accuracy, slowest |
-
-### Cloud APIs
-
-1. **OpenAI** (English, live transcription)
-   - Create a key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-
-2. **RunPod** (Hebrew)
+1. **RunPod (Hebrew)**
    - Sign up at [runpod.io](https://runpod.io)
    - Deploy the ivrit-ai endpoint from the [RunPod console](https://www.runpod.io/console/hub/ivrit-ai/runpod-serverless)
    - Set Active Workers to 0 for scale-to-zero billing
-   - Copy your API key and Endpoint ID
+   - Copy your API key and Endpoint ID into AirType Settings
 
-3. Open AirType Settings, select the cloud engine, and paste your keys. All secrets are stored in the OS keychain.
+2. **OpenAI (Alternative English Endpoint)**
+   - If the RunPod `ivrit-ai` model outputs English dictations using Hebrew script, you can easily separate your English endpoint.
+   - Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+   - Change **English Endpoint** to **OpenAI** in Settings and paste your key.
 
 ## Usage
 
@@ -172,11 +148,10 @@ graph TB
     end
 
     subgraph Backend ["Backend — Rust / Tauri v2"]
-        Hotkeys[Global Hotkey Listener]
+        Hotkeys[Global & Modifier Hotkeys<br><i>tauri-plugin / rdev</i>]
         Audio[Audio Capture<br><i>cpal</i>]
-        Whisper[Local Whisper<br><i>whisper-rs</i>]
-        OpenAI[OpenAI Realtime<br><i>WebSocket</i>]
-        RunPod[RunPod ivrit-ai<br><i>HTTP</i>]
+        OpenAI[OpenAI Whisper<br><i>HTTP</i>]
+        RunPod[RunPod API<br><i>HTTP</i>]
         Inject[Text Injection<br><i>arboard + enigo</i>]
         Keychain[OS Keychain<br><i>keyring-rs</i>]
     end
@@ -184,10 +159,8 @@ graph TB
     Tray[System Tray]
 
     Hotkeys --> Audio
-    Audio --> Whisper
     Audio --> OpenAI
     Audio --> RunPod
-    Whisper --> Inject
     OpenAI --> Inject
     RunPod --> Inject
     Frontend <--> Backend
@@ -201,9 +174,8 @@ graph TB
 | Framework | [Tauri v2](https://tauri.app/) |
 | Backend | Rust |
 | Frontend | [Svelte 5](https://svelte.dev/) |
-| Local STT | [whisper-rs](https://github.com/tazz4843/whisper-rs) (whisper.cpp bindings) |
-| Live STT | [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime) |
-| Hebrew STT | [ivrit-ai](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo) via [RunPod](https://www.runpod.io/) |
+| APIs | Standard JSON HTTP Requests (`reqwest`) |
+| Modifier Hotkeys | [rdev](https://github.com/Narsil/rdev) |
 | Audio | [cpal](https://github.com/RustAudio/cpal) |
 | Text injection | [arboard](https://github.com/1Password/arboard) + [enigo](https://github.com/enigo-rs/enigo) |
 
@@ -220,10 +192,7 @@ xattr -cr /Applications/AirType.app
 Then right-click the app and choose *Open*.
 
 **macOS: Permission errors**
-Go to System Settings → Privacy & Security and enable AirType under *Accessibility*, *Input Monitoring*, and *Microphone*.
-
-**Model download fails or won't load**
-Models are stored in the app config directory (`~/.config/airtype/models/` on Linux, `~/Library/Application Support/airtype/models/` on macOS). Try a smaller model first and check that you have sufficient disk space.
+Go to System Settings → Privacy & Security and enable AirType under *Accessibility*, *Input Monitoring*, and *Microphone*. (Note: `rdev` requires Input Monitoring for single-modifier hotkeys).
 
 **Cloud transcription not working**
 Verify your keys with the built-in test buttons. For OpenAI, confirm that billing is active. For RunPod, check that your endpoint has at least one max worker configured.
