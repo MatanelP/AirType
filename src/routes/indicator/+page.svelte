@@ -11,43 +11,51 @@
       language = e.payload?.language || 'en';
       state = 'recording';
     });
-    
+
+    listen('indicator-warming-up', () => {
+      state = 'warming_up';
+    });
+
     listen('indicator-transcribing', () => {
       state = 'transcribing';
     });
-    
+
     listen('indicator-done', () => {
       state = 'done';
     });
-    
+
     listen('indicator-hide', () => {
       state = 'recording';
     });
   });
-  
+
   let gradient = $derived(
-    state === 'recording' ? 'linear-gradient(135deg, #f87171 0%, #ef4444 100%)' :
-    state === 'transcribing' ? 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%)' :
-    state === 'done' ? 'linear-gradient(135deg, #4ade80 0%, #22c55e 100%)' : 
+    state === 'recording'   ? 'linear-gradient(135deg, #f87171 0%, #ef4444 100%)' :
+    state === 'warming_up'  ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
+    state === 'transcribing'? 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%)' :
+    state === 'done'        ? 'linear-gradient(135deg, #4ade80 0%, #22c55e 100%)' :
     'linear-gradient(135deg, #f87171 0%, #ef4444 100%)'
   );
-  
+
   let icon = $derived(
-    state === 'recording' ? '●' :
+    state === 'recording'    ? '●' :
+    state === 'warming_up'   ? '◌' :
     state === 'transcribing' ? '◐' :
-    state === 'done' ? '✓' : '●'
+    state === 'done'         ? '✓' : '●'
   );
-  
+
   let label = $derived(
-    state === 'recording' ? (language === 'he' ? 'מקליט' : 'Recording') :
-    state === 'transcribing' ? (language === 'he' ? 'מעבד' : 'Processing') :
-    state === 'done' ? (language === 'he' ? 'בוצע' : 'Done') : 'Recording'
+    state === 'recording'    ? (language === 'he' ? 'מקליט'   : 'Recording') :
+    state === 'warming_up'   ? (language === 'he' ? 'מתחמם'   : 'Warming up') :
+    state === 'transcribing' ? (language === 'he' ? 'מעבד'    : 'Processing') :
+    state === 'done'         ? (language === 'he' ? 'בוצע'    : 'Done') :
+    'Recording'
   );
 </script>
 
 <div class="wrap">
   <div class="indicator" style="background: {gradient};">
-    <span class="icon" class:pulse={state === 'recording'} class:spin={state === 'transcribing'}>
+    <span class="icon" class:pulse={state === 'recording' || state === 'warming_up'} class:spin={state === 'transcribing'}>
       {icon}
     </span>
     <span class="label">{label}</span>

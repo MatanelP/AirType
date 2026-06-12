@@ -101,6 +101,11 @@
         startDurationTimer();
       }));
       
+      unlisteners.push(await listen('indicator-warming-up', () => {
+        indicatorState = 'warming_up';
+        isTranscribing = true;
+      }));
+
       unlisteners.push(await listen('indicator-transcribing', () => {
         indicatorState = 'transcribing';
         isTranscribing = true;

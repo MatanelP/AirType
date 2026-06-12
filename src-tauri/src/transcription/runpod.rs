@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 const RUNPOD_API_BASE: &str = "https://api.runpod.ai/v2";
 
-/// RunPod /runsync request payload
+/// RunPod /run request payload
 #[derive(Serialize)]
 struct RunPodRequest {
     input: RunPodInput,
@@ -43,9 +43,16 @@ struct OutputOptions {
     extra_data: bool,
 }
 
-/// RunPod /runsync response
+/// Response from POST /run (async job submission)
 #[derive(Deserialize, Debug)]
-struct RunPodResponse {
+struct RunPodJobResponse {
+    id: String,
+    status: String,
+}
+
+/// Response from GET /status/{id}
+#[derive(Deserialize, Debug)]
+struct RunPodStatusResponse {
     status: String,
     output: Option<serde_json::Value>,
     error: Option<String>,
@@ -53,37 +60,48 @@ struct RunPodResponse {
 
 /// Transcribe audio using ivrit-ai on RunPod Serverless.
 ///
-/// # Arguments
-/// * `api_key` - RunPod API key
-/// * `endpoint_id` - RunPod endpoint ID for the ivrit-ai deployment
-/// * `audio_samples` - f32 mono samples at 16kHz
-/// * `language` - BCP-47 language code (e.g. "he", "en")
-pub async fn transcribe_audio(
+/// `on_status` is called with `"warming_up"` when the worker is cold-starting
+/// (job is IN_QUEUE) and `"processing"` when the worker is actively transcribing
+/// (job is IN_PROGRESS). Pass `|_| {}` if you don't need status updates.
+pub async fn transcribe_audio<F>(
     api_key: &str,
     endpoint_id: &str,
     audio_samples: &[f32],
     language: &str,
-) -> Result<String, String> {
+    on_status: F,
+) -> Result<String, String>
+where
+    F: Fn(&str) + Send,
+{
     let wav_bytes = encode_wav(audio_samples, 16000);
-    transcribe_audio_wav(api_key, endpoint_id, &wav_bytes, language).await
+    transcribe_audio_wav(api_key, endpoint_id, &wav_bytes, language, on_status).await
 }
 
-/// Transcribe Hebrew audio using ivrit-ai on RunPod Serverless (convenience wrapper).
+/// Transcribe Hebrew audio (convenience wrapper, no status callback).
 pub async fn transcribe_hebrew(
     api_key: &str,
     endpoint_id: &str,
     audio_samples: &[f32],
 ) -> Result<String, String> {
-    transcribe_audio(api_key, endpoint_id, audio_samples, "he").await
+    transcribe_audio(api_key, endpoint_id, audio_samples, "he", |_| {}).await
 }
 
 /// Transcribe WAV bytes using ivrit-ai on RunPod Serverless.
-pub async fn transcribe_audio_wav(
+///
+/// Submits a job with POST /run, then polls GET /status/{id} until the job
+/// completes, fails, or times out (120 s). `on_status` receives:
+/// - `"warming_up"` — worker is cold-starting (IN_QUEUE)
+/// - `"processing"` — worker is actively transcribing (IN_PROGRESS)
+pub async fn transcribe_audio_wav<F>(
     api_key: &str,
     endpoint_id: &str,
     wav_bytes: &[u8],
     language: &str,
-) -> Result<String, String> {
+    on_status: F,
+) -> Result<String, String>
+where
+    F: Fn(&str) + Send,
+{
     let blob = BASE64.encode(wav_bytes);
 
     let data_len = wav_bytes.len().saturating_sub(44);
@@ -97,7 +115,7 @@ pub async fn transcribe_audio_wav(
     };
 
     let task = if language == "en" {
-        "translate" // The translate task in Whisper forces output to English
+        "translate" // forces Whisper output to English
     } else {
         "transcribe"
     };
@@ -120,57 +138,102 @@ pub async fn transcribe_audio_wav(
         },
     };
 
-    let url = format!("{}/{}/runsync", RUNPOD_API_BASE, endpoint_id);
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let response = client
-        .post(&url)
+    // Submit job asynchronously
+    let run_url = format!("{}/{}/run", RUNPOD_API_BASE, endpoint_id);
+    let job: RunPodJobResponse = client
+        .post(&run_url)
         .header(AUTHORIZATION, format!("Bearer {}", api_key))
         .header(CONTENT_TYPE, "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("RunPod request failed: {}", e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("RunPod API error ({}): {}", status, body));
-    }
-
-    let result: RunPodResponse = response
+        .map_err(|e| format!("RunPod submit failed: {}", e))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse RunPod response: {}", e))?;
+        .map_err(|e| format!("Failed to parse RunPod job response: {}", e))?;
 
-    if let Some(error) = result.error {
-        return Err(format!("RunPod job error: {}", error));
+    log::info!("RunPod job submitted: {} (initial status: {})", job.id, job.status);
+
+    // Fast-path: job already completed synchronously (rare but possible on warm workers)
+    if job.status == "COMPLETED" {
+        log::info!("RunPod job {} completed immediately", job.id);
+        // We don't have output here from the /run response, fall through to status poll
     }
 
-    if result.status != "COMPLETED" {
-        return Err(format!(
-            "RunPod job did not complete (status: {}). Try again — worker may be cold-starting.",
-            result.status
-        ));
+    // Poll for completion
+    let status_url = format!("{}/{}/status/{}", RUNPOD_API_BASE, endpoint_id, job.id);
+    let start = std::time::Instant::now();
+    let mut last_emitted = String::new();
+
+    loop {
+        if start.elapsed().as_secs() > 120 {
+            return Err("RunPod job timed out after 120 seconds".to_string());
+        }
+
+        let resp = client
+            .get(&status_url)
+            .header(AUTHORIZATION, format!("Bearer {}", api_key))
+            .send()
+            .await
+            .map_err(|e| format!("RunPod status poll failed: {}", e))?;
+
+        let status_resp: RunPodStatusResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse RunPod status response: {}", e))?;
+
+        log::info!("RunPod job {} status: {}", job.id, status_resp.status);
+
+        match status_resp.status.as_str() {
+            "IN_QUEUE" => {
+                if last_emitted != "warming_up" {
+                    on_status("warming_up");
+                    last_emitted = "warming_up".to_string();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            }
+            "IN_PROGRESS" => {
+                if last_emitted != "processing" {
+                    on_status("processing");
+                    last_emitted = "processing".to_string();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+            "COMPLETED" => {
+                if let Some(error) = status_resp.error {
+                    return Err(format!("RunPod job error: {}", error));
+                }
+                let text = extract_text_from_output(&status_resp.output)?;
+                log::info!("RunPod {} transcription: {}", language, text);
+                return Ok(text);
+            }
+            "FAILED" | "CANCELLED" => {
+                return Err(format!(
+                    "RunPod job {} (status: {})",
+                    status_resp.error.unwrap_or_else(|| "unknown error".to_string()),
+                    status_resp.status,
+                ));
+            }
+            other => {
+                log::warn!("Unknown RunPod status: {}", other);
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
+        }
     }
-
-    let text = extract_text_from_output(&result.output)?;
-
-    log::info!("RunPod {} transcription: {}", language, text);
-    Ok(text)
 }
 
-/// Transcribe Hebrew WAV bytes using ivrit-ai on RunPod Serverless (convenience wrapper).
+/// Transcribe Hebrew WAV bytes (convenience wrapper, no status callback).
 pub async fn transcribe_hebrew_wav(
     api_key: &str,
     endpoint_id: &str,
     wav_bytes: &[u8],
 ) -> Result<String, String> {
-    transcribe_audio_wav(api_key, endpoint_id, wav_bytes, "he").await
+    transcribe_audio_wav(api_key, endpoint_id, wav_bytes, "he", |_| {}).await
 }
 
 /// Extract transcription text from RunPod output

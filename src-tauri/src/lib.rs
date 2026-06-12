@@ -153,7 +153,15 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     let language = state.recording_language.read().clone();
     log::info!("Captured {} audio samples for {} (Batch)", samples.len(), language);
     let _ = app.emit("transcribing", ());
-    indicator_transcribing(&app);
+
+    // Build a status callback that drives the indicator through warming_up → transcribing.
+    // For OpenAI there is no cold-start concept so we emit transcribing immediately instead.
+    let app_cb = app.clone();
+    let status_cb = move |status: &str| match status {
+        "warming_up" => indicator_warming_up(&app_cb),
+        "processing"  => indicator_transcribing(&app_cb),
+        _ => {}
+    };
 
     let transcription = if language == "he" {
         let rp_key = settings.runpod_api_key
@@ -162,8 +170,8 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
         let rp_endpoint = settings.runpod_endpoint_id
             .filter(|k| !k.is_empty())
             .ok_or_else(|| "Hebrew default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
-        
-        transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+
+        transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
     } else {
         match settings.english_endpoint_type {
             EnglishEndpointType::SharedRunPod => {
@@ -173,8 +181,8 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                 let rp_endpoint = settings.runpod_endpoint_id
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "Default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
-                
-                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+
+                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
             }
             EnglishEndpointType::CustomRunPod => {
                 let rp_key = settings.english_custom_runpod_api_key
@@ -183,14 +191,16 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                 let rp_endpoint = settings.english_custom_runpod_endpoint_id
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "Custom RunPod Endpoint ID for English not set. Go to Settings to add it.".to_string())?;
-                
-                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language).await?
+
+                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
             }
             EnglishEndpointType::OpenAI => {
+                // OpenAI has no cold-start delay — go straight to transcribing.
+                indicator_transcribing(&app);
                 let openai_key = settings.english_openai_api_key
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "OpenAI API key not set. Go to Settings to add it.".to_string())?;
-                
+
                 let wav_bytes = encode_wav(&samples, 16000);
                 transcribe_english(&openai_key, &wav_bytes).await?
             }
@@ -447,7 +457,7 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
                     let rp_endpoint = settings.runpod_endpoint_id
                         .filter(|k| !k.is_empty())
                         .ok_or_else(|| "Default RunPod Endpoint ID not set".to_string())?;
-                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en").await
+                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en", |_| {}).await
                 }
                 settings::EnglishEndpointType::CustomRunPod => {
                     let rp_key = settings.english_custom_runpod_api_key
@@ -456,7 +466,7 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
                     let rp_endpoint = settings.english_custom_runpod_endpoint_id
                         .filter(|k| !k.is_empty())
                         .ok_or_else(|| "Custom RunPod Endpoint ID for English not set".to_string())?;
-                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en").await
+                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en", |_| {}).await
                 }
                 settings::EnglishEndpointType::OpenAI => {
                     let api_key = settings.english_openai_api_key
@@ -600,6 +610,12 @@ fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         hide_indicator(&app_clone);
     });
+}
+
+/// Update indicator to show "Warming up" state (RunPod cold start)
+fn indicator_warming_up<R: tauri::Runtime>(app: &AppHandle<R>) {
+    log::info!("Indicator: Warming up...");
+    let _ = app.emit("indicator-warming-up", ());
 }
 
 /// Update indicator to show "Transcribing" state
