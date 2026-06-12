@@ -19,7 +19,9 @@ vite.config.ts.timestamp-*
 
 # Rust/Cargo
 src-tauri/target/
-src-tauri/Cargo.lock
+# Cargo.lock IS committed: AirType ships as an application, so we pin exact
+# dependency versions to keep CI reproducible (a fresh resolve once pulled a
+# broken time-macros that failed the macOS build).
 **/*.rs.bk
 
 # IDE
