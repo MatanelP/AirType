@@ -1,6 +1,6 @@
 [package]
 name = "airtype"
-version = "1.1.1"
+version = "1.2.0"
 description = "AirType - Voice to Text Desktop App"
 authors = ["MatanelP"]
 edition = "2021"
@@ -19,6 +19,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

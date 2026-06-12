@@ -214,9 +214,9 @@ where
             }
             "FAILED" | "CANCELLED" => {
                 return Err(format!(
-                    "RunPod job {} (status: {})",
-                    status_resp.error.unwrap_or_else(|| "unknown error".to_string()),
+                    "RunPod job {} ({})",
                     status_resp.status,
+                    status_resp.error.unwrap_or_else(|| "unknown error".to_string()),
                 ));
             }
             other => {

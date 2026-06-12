@@ -27,7 +27,16 @@
   let recordingLanguage = $state('en');
   let indicatorState = $state('idle'); // idle, recording, transcribing, done
   let needsAccessibility = $state(false);
-  
+
+  // Self-update
+  /** @type {{version: string, current_version: string, notes: string | null, date: string | null} | null} */
+  let availableUpdate = $state(null);
+  let updateInstalling = $state(false);
+  let updateProgress = $state(0);
+  /** @type {string | null} */
+  let updateError = $state(null);
+  let updateDismissed = $state(false);
+
   let settings = $state({
     language: 'en',
     hotkey_english: 'Ctrl+Shift+E',
@@ -131,6 +140,16 @@
       unlisteners.push(await listen('accessibility-permission-needed', () => {
         needsAccessibility = true;
       }));
+
+      // Self-update: backend checks on startup and emits when an update exists.
+      unlisteners.push(await listen('update-available', (event) => {
+        availableUpdate = /** @type {any} */ (event.payload);
+        updateDismissed = false;
+      }));
+
+      unlisteners.push(await listen('update-progress', (event) => {
+        updateProgress = Math.round(/** @type {number} */ (event.payload));
+      }));
     })();
     
     // Cleanup on unmount
@@ -218,6 +237,19 @@
       } catch (_) {}
     }
   }
+
+  async function installUpdate() {
+    updateError = null;
+    updateInstalling = true;
+    updateProgress = 0;
+    try {
+      // Downloads, installs, and relaunches — this call does not return on success.
+      await invoke('download_and_install_update');
+    } catch (e) {
+      updateError = String(e);
+      updateInstalling = false;
+    }
+  }
 </script>
 
 <main class="app" data-tauri-drag-region>
@@ -234,6 +266,27 @@
       </svg>
     </button>
   </header>
+
+  <!-- Update Available Banner -->
+  {#if availableUpdate && !updateDismissed}
+    <div class="update-banner">
+      {#if updateInstalling}
+        <span>⬇️ <strong>Updating to v{availableUpdate.version}…</strong> {updateProgress}%</span>
+        <div class="update-progress-track">
+          <div class="update-progress-fill" style="width: {updateProgress}%"></div>
+        </div>
+      {:else}
+        <span>🚀 <strong>Update available</strong> — v{availableUpdate.version} is ready to install.</span>
+        <div class="update-actions">
+          <button class="update-btn" onclick={installUpdate}>Install &amp; Restart</button>
+          <button class="update-dismiss" onclick={() => updateDismissed = true} aria-label="Dismiss">Later</button>
+        </div>
+      {/if}
+      {#if updateError}
+        <span class="update-error">{updateError}</span>
+      {/if}
+    </div>
+  {/if}
 
   <!-- Accessibility Permission Banner -->
   {#if needsAccessibility}
@@ -636,5 +689,81 @@
 
   .accessibility-btn:hover {
     background: rgba(245, 158, 11, 0.35);
+  }
+
+  /* Update available banner */
+  .update-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: rgba(99, 102, 241, 0.15);
+    border-bottom: 1px solid rgba(99, 102, 241, 0.35);
+    color: #c7d2fe;
+    font-size: 0.8125rem;
+    flex-shrink: 0;
+  }
+
+  .update-banner > span {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    justify-content: space-between;
+  }
+
+  .update-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    align-self: flex-end;
+  }
+
+  .update-btn {
+    white-space: nowrap;
+    background: var(--color-primary, #6366f1);
+    border: 1px solid var(--color-primary, #6366f1);
+    border-radius: var(--radius-sm, 4px);
+    color: white;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .update-btn:hover {
+    background: #4f46e5;
+  }
+
+  .update-dismiss {
+    background: none;
+    border: none;
+    color: #a5b4fc;
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0.8;
+  }
+
+  .update-dismiss:hover {
+    opacity: 1;
+  }
+
+  .update-progress-track {
+    width: 100%;
+    height: 5px;
+    background: rgba(99, 102, 241, 0.2);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .update-progress-fill {
+    height: 100%;
+    background: var(--color-primary, #6366f1);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+  }
+
+  .update-error {
+    color: #fca5a5;
+    font-size: 0.75rem;
   }
 </style>

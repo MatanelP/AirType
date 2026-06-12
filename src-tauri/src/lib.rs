@@ -30,6 +30,7 @@ use transcription::{
     encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
     transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 /// Application state shared across all Tauri commands
 pub struct AppState {
@@ -612,6 +613,122 @@ fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
     });
 }
 
+// ── Self-update ───────────────────────────────────────────────────────────────
+
+/// Metadata about an available update, sent to the frontend.
+#[derive(Clone, serde::Serialize)]
+pub struct UpdateInfo {
+    /// Version offered by the update manifest (e.g. "1.2.0")
+    pub version: String,
+    /// Version currently running
+    pub current_version: String,
+    /// Release notes / changelog body, if the manifest provides one
+    pub notes: Option<String>,
+    /// Publish date from the manifest, if present
+    pub date: Option<String>,
+}
+
+/// Query the update endpoint and return info about an available update, or
+/// `None` if the running version is already current.
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => {
+            log::info!("Update available: {} (current {})", update.version, update.current_version);
+            Ok(Some(UpdateInfo {
+                version: update.version.clone(),
+                current_version: update.current_version.clone(),
+                notes: update.body.clone(),
+                date: update.date.map(|d| d.to_string()),
+            }))
+        }
+        Ok(None) => {
+            log::info!("No update available — already on the latest version");
+            Ok(None)
+        }
+        Err(e) => Err(format!("Update check failed: {}", e)),
+    }
+}
+
+/// Download and install the available update, emitting `update-progress`
+/// (0–100) as it downloads, then relaunch the app.
+#[tauri::command]
+async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("Update check failed: {}", e))?
+        .ok_or_else(|| "No update available".to_string())?;
+
+    log::info!("Downloading update {}...", update.version);
+
+    let downloaded = Arc::new(AtomicU64::new(0));
+    let app_progress = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                let so_far = downloaded.fetch_add(chunk as u64, Ordering::Relaxed) + chunk as u64;
+                let pct = total
+                    .map(|t| (so_far as f64 / t as f64) * 100.0)
+                    .unwrap_or(0.0);
+                let _ = app_progress.emit("update-progress", pct);
+            },
+            || {
+                log::info!("Update download finished, installing...");
+            },
+        )
+        .await
+        .map_err(|e| format!("Update install failed: {}", e))?;
+
+    log::info!("Update installed — relaunching");
+    app.restart();
+}
+
+/// On startup, check for an update (if enabled in settings) and notify the
+/// frontend via the `update-available` event so it can surface a prompt.
+fn spawn_startup_update_check(app: &AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Give the UI a moment to mount its `update-available` listener.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        if !handle.state::<AppState>().get_settings().auto_check_updates {
+            log::info!("Automatic update check disabled in settings");
+            return;
+        }
+
+        let updater = match handle.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!("Updater unavailable: {}", e);
+                return;
+            }
+        };
+
+        match updater.check().await {
+            Ok(Some(update)) => {
+                log::info!("Startup: update {} available", update.version);
+                let _ = handle.emit(
+                    "update-available",
+                    UpdateInfo {
+                        version: update.version.clone(),
+                        current_version: update.current_version.clone(),
+                        notes: update.body.clone(),
+                        date: update.date.map(|d| d.to_string()),
+                    },
+                );
+            }
+            Ok(None) => log::info!("Startup: no update available"),
+            Err(e) => log::warn!("Startup update check failed: {}", e),
+        }
+    });
+}
+
 /// Update indicator to show "Warming up" state (RunPod cold start)
 fn indicator_warming_up<R: tauri::Runtime>(app: &AppHandle<R>) {
     log::info!("Indicator: Warming up...");
@@ -717,6 +834,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(shortcut_plugin)
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -735,6 +853,8 @@ pub fn run() {
             check_accessibility_permission,
             open_accessibility_settings,
             preview_indicator,
+            check_for_update,
+            download_and_install_update,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");
@@ -914,9 +1034,14 @@ pub fn run() {
                                 log::info!("Hotkey: Stop recording");
                                 let state = app.state::<AppState>();
                                 if *state.is_recording.read() {
-                                    // Update indicator to transcribing state (use global emit)
-                                    indicator_transcribing(&app);
-                                    
+                                    // Show "Warming up" immediately on release so the indicator
+                                    // only ever moves forward (warming → processing → done).
+                                    // stop_recording's status callback refines this: RunPod polls
+                                    // drive warming_up/processing, and OpenAI jumps straight to
+                                    // processing. Emitting "transcribing" here instead would make a
+                                    // cold RunPod worker flash purple→orange→purple (backwards).
+                                    indicator_warming_up(&app);
+
                                     tauri::async_runtime::spawn(async move {
                                         let state = app.state::<AppState>();
                                         match stop_recording(state, app.clone()).await {
@@ -966,6 +1091,10 @@ pub fn run() {
             }
 
             log::info!("AirType setup complete");
+
+            // Kick off a background update check (respects the auto_check_updates
+            // setting) and notify the UI if a newer version is available.
+            spawn_startup_update_check(app.handle());
 
             // Check Accessibility permission (required for text injection on macOS).
             // Emit event so the UI can show a persistent warning if not yet granted.

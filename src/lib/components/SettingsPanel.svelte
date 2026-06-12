@@ -235,6 +235,28 @@
     }
   }
 
+  // ── Updates ───────────────────────────────────────────────────────────────
+  let updateCheckState = $state('idle'); // idle | checking | available | uptodate | error
+  let updateCheckMsg = $state('');
+
+  async function checkForUpdates() {
+    updateCheckState = 'checking';
+    updateCheckMsg = '';
+    try {
+      const update = await invoke('check_for_update');
+      if (update) {
+        updateCheckState = 'available';
+        updateCheckMsg = `v${update.version} is available — close Settings to install it.`;
+      } else {
+        updateCheckState = 'uptodate';
+        updateCheckMsg = `You're on the latest version (v${appVersion}).`;
+      }
+    } catch (e) {
+      updateCheckState = 'error';
+      updateCheckMsg = String(e);
+    }
+  }
+
   // ── Log viewer ────────────────────────────────────────────────────────────
   let logs = $state([]);
   let logsOpen = $state(false);
@@ -620,6 +642,44 @@
                 <span class="preview-hint">Shows indicator for 2 s</span>
               </div>
             </div>
+          {/if}
+        </section>
+
+        <!-- Updates -->
+        <section class="settings-section">
+          <h3>Updates</h3>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Check on startup</span>
+              <span class="setting-desc">Automatically look for new versions when AirType launches</span>
+            </div>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                checked={localSettings.auto_check_updates ?? true}
+                onchange={(e) => updateSetting('auto_check_updates', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Manual check</span>
+              <span class="setting-desc">Check GitHub releases for an update right now</span>
+            </div>
+            <button
+              class="update-check-btn"
+              onclick={checkForUpdates}
+              disabled={updateCheckState === 'checking'}
+            >
+              {updateCheckState === 'checking' ? 'Checking…' : 'Check now'}
+            </button>
+          </div>
+
+          {#if updateCheckMsg}
+            <p class="update-check-msg" class:err={updateCheckState === 'error'}>{updateCheckMsg}</p>
           {/if}
         </section>
 
@@ -1180,4 +1240,25 @@
     font-size: 0.6875rem;
     color: var(--color-text-muted, #8888a0);
   }
+
+  .update-check-btn {
+    white-space: nowrap;
+    padding: 0.4rem 0.9rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-primary, #6366f1);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-primary, #6366f1);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .update-check-btn:hover:not(:disabled) { background: rgba(99, 102, 241, 0.12); }
+  .update-check-btn:disabled { opacity: 0.6; cursor: default; }
+
+  .update-check-msg {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #8888a0);
+  }
+  .update-check-msg.err { color: #fca5a5; }
 </style>

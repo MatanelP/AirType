@@ -1,11 +1,10 @@
 TODOs
-- [IMPLEMENTED - UNDER REVIEW] indicator position + transparency: configurable bottom offset, alignment, size, x-offset via Settings > Advanced. shadow:false fixes the macOS box. preview button in settings.
-- first run spin up time
-- [IMPLEMENTED - UNDER REVIEW] warmup indicator: switched RunPod from /runsync to /run+poll; IN_QUEUE shows orange "Warming up", IN_PROGRESS shows purple "Processing". OpenAI goes straight to Processing.
-- [IMPLEMENTED - UNDER REVIEW] double status bar icon: removed trayIcon from tauri.conf.json (was creating a second icon alongside the programmatic one in setup).
-- [IMPLEMENTED - UNDER REVIEW] ui not showing on dock icon press: handle RunEvent::Reopen to show+focus main window when all windows are hidden.
+- [REVIEWED - OK] indicator position + transparency: configurable bottom offset, alignment, size, x-offset via Settings > Advanced. shadow:false fixes the macOS box. preview button in settings.
+- [REVIEWED - FIXED] warmup indicator: switched RunPod from /runsync to /run+poll; IN_QUEUE shows orange "Warming up", IN_PROGRESS shows purple "Processing". OpenAI goes straight to Processing. FIX: hotkey RecordingStop handler was forcing "Processing" before stop_recording ran, making a cold worker flash purple→orange→purple; now emits "Warming up" first so state only moves forward. Also fixed FAILED/CANCELLED error message arg order.
+- [REVIEWED - OK] double status bar icon: removed trayIcon from tauri.conf.json (was creating a second icon alongside the programmatic one in setup).
+- [REVIEWED - OK] ui not showing on dock icon press: handle RunEvent::Reopen to show+focus main window when all windows are hidden.
 - on macos make sure the app can sart on login when the flag is set in the settings.
-- self update - check for update and installs + auto update mechanism
+- [IMPLEMENTED - UNDER REVIEW] self update - check for update and installs + auto update mechanism: Tauri updater plugin. Startup auto-check (toggle in Settings > Updates) emits update-available → banner in main window with Install & Restart (download progress bar). Manual "Check now" in settings. Backend commands check_for_update / download_and_install_update. CI signs updater artifacts + generates latest.json (needs TAURI_SIGNING_PRIVATE_KEY[_PASSWORD] secrets). Signing keypair generated at ~/.airtype-signing/airtype.key(.pub); pubkey embedded in tauri.conf.json.
 - changing hot key to alt, or control is crashing everything on macOS, need to fix that and thoghrly test. 
 - history trancribes 
 - x on  the last transcription in the ui to dismiss it
