@@ -216,7 +216,68 @@ impl TextInjector {
             return Ok(());
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            let mut clipboard = arboard::Clipboard::new()
+                .map_err(|e| InjectionError::InitError(format!("Clipboard: {}", e)))?;
+
+            let prev = clipboard.get_text().ok();
+
+            clipboard
+                .set_text(text)
+                .map_err(|e| InjectionError::TypeError(format!("Clipboard set: {}", e)))?;
+
+            // Give the pasteboard a moment to settle before synthesizing the
+            // paste keystroke.
+            thread::sleep(Duration::from_millis(50));
+
+            // On macOS, `Key::Unicode('v')` routes through Apple's Text
+            // Services Manager (TSMGetInputSourceProperty) to resolve the
+            // current keyboard layout. TSM asserts that it must run on the
+            // main thread (libdispatch's dispatch_assert_queue), so calling
+            // it from a tokio worker or std::thread causes SIGTRAP. We
+            // sidestep TSM by passing the hardware virtual keycode for 'v'
+            // (kVK_ANSI_V = 0x09) directly via `Key::Other`.
+            let paste_key = Key::Other(0x09);
+
+            // Synthesized CGEvents are delivered asynchronously and some apps
+            // miss the 'v' if it arrives in the same event-loop tick as the
+            // Cmd modifier flag. Small gaps between press/click/release make
+            // the chord land reliably.
+            self.enigo
+                .key(Key::Meta, Direction::Press)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            thread::sleep(Duration::from_millis(20));
+            self.enigo
+                .key(paste_key, Direction::Click)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            thread::sleep(Duration::from_millis(20));
+            self.enigo
+                .key(Key::Meta, Direction::Release)
+                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+
+            // CRITICAL: the Cmd+V CGEvent above is delivered asynchronously to
+            // the frontmost app's run loop. The app reads NSPasteboard only
+            // when it eventually processes that event, which is frequently
+            // well over 50 ms later (especially right after a focus change or
+            // under load). If we restore the previous clipboard too soon, the
+            // app reads the restored/old content and pastes that instead — the
+            // keystroke still "succeeds", so logs look fine while nothing is
+            // injected. Restore on a background thread after a generous delay
+            // so the target app wins the race.
+            if let Some(prev_text) = prev {
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(700));
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(prev_text);
+                    }
+                });
+            }
+
+            Ok(())
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let mut clipboard = arboard::Clipboard::new()
                 .map_err(|e| InjectionError::InitError(format!("Clipboard: {}", e)))?;
@@ -229,31 +290,14 @@ impl TextInjector {
 
             thread::sleep(Duration::from_millis(30));
 
-            #[cfg(target_os = "macos")]
-            let modifier = Key::Meta;
-            #[cfg(not(target_os = "macos"))]
-            let modifier = Key::Control;
-
-            // On macOS, `Key::Unicode('v')` routes through Apple's Text
-            // Services Manager (TSMGetInputSourceProperty) to resolve the
-            // current keyboard layout. TSM asserts that it must run on the
-            // main thread (libdispatch's dispatch_assert_queue), so calling
-            // it from a tokio worker or std::thread causes SIGTRAP. We
-            // sidestep TSM by passing the hardware virtual keycode for 'v'
-            // (kVK_ANSI_V = 0x09) directly via `Key::Other`.
-            #[cfg(target_os = "macos")]
-            let paste_key = Key::Other(0x09);
-            #[cfg(not(target_os = "macos"))]
-            let paste_key = Key::Unicode('v');
-
             self.enigo
-                .key(modifier, Direction::Press)
+                .key(Key::Control, Direction::Press)
                 .map_err(|e| InjectionError::TypeError(e.to_string()))?;
             self.enigo
-                .key(paste_key, Direction::Click)
+                .key(Key::Unicode('v'), Direction::Click)
                 .map_err(|e| InjectionError::TypeError(e.to_string()))?;
             self.enigo
-                .key(modifier, Direction::Release)
+                .key(Key::Control, Direction::Release)
                 .map_err(|e| InjectionError::TypeError(e.to_string()))?;
 
             thread::sleep(Duration::from_millis(50));
