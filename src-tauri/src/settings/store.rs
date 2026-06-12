@@ -294,6 +294,7 @@ mod tests {
                 start_minimized: true,
                 start_on_login: true,
                 inject_delay_ms: 50,
+                ..Settings::default()
             };
 
             // Write settings

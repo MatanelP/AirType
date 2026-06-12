@@ -224,6 +224,17 @@
     }
   }
 
+  // ── Advanced / Indicator ─────────────────────────────────────────────────
+  let advancedOpen = $state(false);
+
+  async function previewIndicator() {
+    try {
+      await invoke('preview_indicator');
+    } catch (e) {
+      console.error('preview_indicator failed:', e);
+    }
+  }
+
   // ── Log viewer ────────────────────────────────────────────────────────────
   let logs = $state([]);
   let logsOpen = $state(false);
@@ -513,6 +524,103 @@
               <span class="toggle-slider"></span>
             </label>
           </div>
+        </section>
+
+        <!-- Advanced: Indicator -->
+        <section class="settings-section">
+          <div
+            class="advanced-header"
+            role="button"
+            tabindex="0"
+            onclick={() => advancedOpen = !advancedOpen}
+            onkeydown={(e) => e.key === 'Enter' && (advancedOpen = !advancedOpen)}
+          >
+            <h3 style="margin:0">Advanced: Indicator</h3>
+            <span class="logs-chevron">{advancedOpen ? '▲' : '▼'}</span>
+          </div>
+
+          {#if advancedOpen}
+            <div class="advanced-body">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Alignment</span>
+                  <span class="setting-desc">Horizontal anchor on screen</span>
+                </div>
+                <div class="align-selector">
+                  {#each ['left', 'center', 'right'] as a}
+                    <button
+                      class="align-btn"
+                      class:active={( localSettings.indicator_align ?? 'center' ) === a}
+                      onclick={() => updateSetting('indicator_align', a)}
+                    >{a[0].toUpperCase() + a.slice(1)}</button>
+                  {/each}
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Bottom offset</span>
+                  <span class="setting-desc">Distance from screen bottom (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="20" max="600" step="4"
+                  value={localSettings.indicator_bottom_offset ?? 80}
+                  oninput={(e) => updateSetting('indicator_bottom_offset', parseFloat(e.target.value) || 80)}
+                />
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Horizontal offset</span>
+                  <span class="setting-desc">Fine-tune left/right position (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="-800" max="800" step="4"
+                  value={localSettings.indicator_x_offset ?? 0}
+                  oninput={(e) => updateSetting('indicator_x_offset', parseFloat(e.target.value) || 0)}
+                />
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Width</span>
+                  <span class="setting-desc">Indicator window width (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="80" max="400" step="4"
+                  value={localSettings.indicator_width ?? 160}
+                  oninput={(e) => updateSetting('indicator_width', parseInt(e.target.value) || 160)}
+                />
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Height</span>
+                  <span class="setting-desc">Indicator window height (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="30" max="120" step="2"
+                  value={localSettings.indicator_height ?? 48}
+                  oninput={(e) => updateSetting('indicator_height', parseInt(e.target.value) || 48)}
+                />
+              </div>
+
+              <div class="preview-row">
+                <button class="preview-btn" onclick={previewIndicator}>
+                  Preview position ↗
+                </button>
+                <span class="preview-hint">Shows indicator for 2 s</span>
+              </div>
+            </div>
+          {/if}
         </section>
 
         <div class="settings-version" aria-label="App version">
@@ -998,24 +1106,78 @@
     word-break: break-all;
   }
 
-  /* Advanced collapsible */
-  .advanced-details {
-    margin-top: 0.25rem;
-  }
-
-  .advanced-summary {
-    font-size: 0.6875rem;
-    color: var(--color-text-muted, #8888a0);
-    cursor: pointer;
-    user-select: none;
-    list-style: none;
+  /* Advanced: Indicator */
+  .advanced-header {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-    padding: 0.25rem 0;
+    justify-content: space-between;
+    cursor: pointer;
+    padding: 0.25rem 0 0.5rem;
+    user-select: none;
   }
-  .advanced-summary::before { content: '▶'; font-size: 0.5rem; }
-  details[open] .advanced-summary::before { content: '▼'; }
-  .advanced-summary::-webkit-details-marker { display: none; }
-  .advanced-summary:hover { color: var(--color-text, #f0f0f5); }
+  .advanced-header:hover h3 { color: var(--color-text, #f0f0f5); }
+
+  .advanced-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .align-selector {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .align-btn {
+    padding: 0.35rem 0.65rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-text-muted, #8888a0);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .align-btn:hover { border-color: var(--color-primary, #6366f1); color: var(--color-text, #f0f0f5); }
+  .align-btn.active {
+    background: var(--color-primary, #6366f1);
+    border-color: var(--color-primary, #6366f1);
+    color: white;
+  }
+
+  .num-input {
+    width: 70px;
+    padding: 0.4rem 0.5rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-text, #f0f0f5);
+    font-size: 0.8125rem;
+    font-family: monospace;
+    text-align: right;
+  }
+  .num-input:focus { outline: none; border-color: var(--color-primary, #6366f1); }
+
+  .preview-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 0 0.25rem;
+  }
+
+  .preview-btn {
+    padding: 0.4rem 0.9rem;
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-primary, #6366f1);
+    border-radius: var(--radius-md, 8px);
+    color: var(--color-primary, #6366f1);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .preview-btn:hover { background: rgba(99, 102, 241, 0.12); }
+
+  .preview-hint {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted, #8888a0);
+  }
 </style>

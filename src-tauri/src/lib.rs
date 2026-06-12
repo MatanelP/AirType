@@ -25,7 +25,7 @@ use hotkeys::{
     KeyboardListener, ModifierKey,
 };
 use injection::TextInjector;
-use settings::{EnglishEndpointType, Settings, SettingsStore};
+use settings::{EnglishEndpointType, IndicatorAlign, Settings, SettingsStore};
 use transcription::{
     encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
     transcribe_english, transcribe_hebrew_wav, validate_runpod,
@@ -545,37 +545,60 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     }
 }
 
-/// Show the floating indicator window at bottom center of screen
+/// Show the floating indicator window using current indicator settings
 fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     log::info!("Showing indicator for language: {}", language);
-    
-    let _lang = language.to_string();
+
+    let settings = app.state::<AppState>().get_settings();
+    let win_w = settings.indicator_width as f64;
+    let win_h = settings.indicator_height as f64;
+    let bottom_offset = settings.indicator_bottom_offset;
+    let x_offset = settings.indicator_x_offset;
+    let align = settings.indicator_align;
+
     let app_clone = app.clone();
-    
-    // Emit event first (global emit works better)
+
+    // Emit event first so the indicator webview can update its state
     let _ = app.emit("indicator-show", serde_json::json!({ "language": language }));
-    
+
     // Run window operations on main thread to avoid X11 threading issues
     let _ = app.run_on_main_thread(move || {
         if let Some(indicator) = app_clone.get_webview_window("indicator") {
-            // Position at bottom center of primary monitor
+            // Resize to configured dimensions
+            let _ = indicator.set_size(tauri::Size::Logical(tauri::LogicalSize { width: win_w, height: win_h }));
+
+            // Position using configured alignment + offsets
             if let Ok(Some(monitor)) = indicator.primary_monitor() {
                 let size = monitor.size();
                 let scale = monitor.scale_factor();
                 let logical_w = size.width as f64 / scale;
                 let logical_h = size.height as f64 / scale;
-                
-                // Window is 160x48 (includes padding for the shadow + pill)
-                let x = (logical_w - 160.0) / 2.0;
-                let y = logical_h - 48.0 - 60.0;
-                
-                log::info!("Indicator position: ({}, {})", x, y);
+
+                let x = match align {
+                    IndicatorAlign::Left   => x_offset,
+                    IndicatorAlign::Center => (logical_w - win_w) / 2.0 + x_offset,
+                    IndicatorAlign::Right  => logical_w - win_w + x_offset,
+                };
+                let y = logical_h - win_h - bottom_offset;
+
+                log::info!("Indicator position: ({}, {}) size: {}x{}", x, y, win_w, win_h);
                 let _ = indicator.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
             }
-            
-            // Show window
+
             let _ = indicator.show();
         }
+    });
+}
+
+/// Briefly show the indicator so the user can preview the current position/size settings.
+#[tauri::command]
+fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
+    let language = state.recording_language.read().clone();
+    show_indicator(&app, &language);
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        hide_indicator(&app_clone);
     });
 }
 
@@ -695,6 +718,7 @@ pub fn run() {
             update_hotkeys,
             check_accessibility_permission,
             open_accessibility_settings,
+            preview_indicator,
         ])
         .setup(move |app| {
             log::info!("Setting up AirType...");

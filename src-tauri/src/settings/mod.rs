@@ -26,6 +26,16 @@ pub enum Language {
     Hebrew,
 }
 
+/// Horizontal alignment of the floating indicator on screen
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IndicatorAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
 /// Which endpoint type to use for English transcription
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -77,7 +87,28 @@ pub struct Settings {
     pub start_on_login: bool,
     /// Delay in milliseconds between injected characters
     pub inject_delay_ms: u64,
+
+    // ── Indicator appearance ──────────────────────────────────────────────────
+    /// Distance from the bottom of the screen in logical pixels
+    #[serde(default = "default_indicator_bottom_offset")]
+    pub indicator_bottom_offset: f64,
+    /// Horizontal alignment on screen
+    #[serde(default)]
+    pub indicator_align: IndicatorAlign,
+    /// Horizontal offset from the aligned edge in logical pixels (positive = right)
+    #[serde(default)]
+    pub indicator_x_offset: f64,
+    /// Indicator window width in logical pixels
+    #[serde(default = "default_indicator_width")]
+    pub indicator_width: u32,
+    /// Indicator window height in logical pixels
+    #[serde(default = "default_indicator_height")]
+    pub indicator_height: u32,
 }
+
+fn default_indicator_bottom_offset() -> f64 { 80.0 }
+fn default_indicator_width() -> u32 { 160 }
+fn default_indicator_height() -> u32 { 48 }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -97,6 +128,12 @@ impl Default for Settings {
             start_minimized: false,
             start_on_login: false,
             inject_delay_ms: 10,
+
+            indicator_bottom_offset: default_indicator_bottom_offset(),
+            indicator_align: IndicatorAlign::Center,
+            indicator_x_offset: 0.0,
+            indicator_width: default_indicator_width(),
+            indicator_height: default_indicator_height(),
         }
     }
 }
