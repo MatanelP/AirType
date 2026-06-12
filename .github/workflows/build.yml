@@ -52,11 +52,9 @@ jobs:
       - name: Build Tauri app
         run: npx tauri build --bundles deb,rpm,appimage
         env:
-          # Required for the self-updater: signs the updater artifacts and emits
-          # the .sig files that latest.json references. Set these repo secrets
-          # from the keypair (see README → Releasing & self-update).
+          # Signs updater artifacts — key has no password so don't set the
+          # password env var (an empty string causes "Wrong password" in minisign).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -104,7 +102,6 @@ jobs:
         run: npx tauri build --bundles app,dmg
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_TOOLCHAIN_FILE: ${{ runner.temp }}/no-native.cmake
           MACOSX_DEPLOYMENT_TARGET: '11.0'
           APPLE_SIGNING_IDENTITY: '-'
@@ -145,7 +142,6 @@ jobs:
         run: npx tauri build --bundles msi,nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
