@@ -231,30 +231,18 @@ impl TextInjector {
             // paste keystroke.
             thread::sleep(Duration::from_millis(50));
 
-            // On macOS, `Key::Unicode('v')` routes through Apple's Text
-            // Services Manager (TSMGetInputSourceProperty) to resolve the
-            // current keyboard layout. TSM asserts that it must run on the
-            // main thread (libdispatch's dispatch_assert_queue), so calling
-            // it from a tokio worker or std::thread causes SIGTRAP. We
-            // sidestep TSM by passing the hardware virtual keycode for 'v'
-            // (kVK_ANSI_V = 0x09) directly via `Key::Other`.
-            let paste_key = Key::Other(0x09);
-
-            // Synthesized CGEvents are delivered asynchronously and some apps
-            // miss the 'v' if it arrives in the same event-loop tick as the
-            // Cmd modifier flag. Small gaps between press/click/release make
-            // the chord land reliably.
-            self.enigo
-                .key(Key::Meta, Direction::Press)
-                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
-            thread::sleep(Duration::from_millis(20));
-            self.enigo
-                .key(paste_key, Direction::Click)
-                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
-            thread::sleep(Duration::from_millis(20));
-            self.enigo
-                .key(Key::Meta, Direction::Release)
-                .map_err(|e| InjectionError::TypeError(e.to_string()))?;
+            // Post Cmd+V as raw CGEvents with the Command flag set EXPLICITLY on
+            // the 'v' key-down/up. We do NOT use enigo here: enigo emits the
+            // modifier (Cmd) and the key ('v') as independent CGEvents and
+            // relies on the OS to associate the held flag, which on macOS is
+            // unreliable — the 'v' frequently arrives without the Command flag
+            // and the app inserts a literal "v" instead of pasting. Setting the
+            // flag directly on the key event guarantees the chord is atomic.
+            //
+            // kVK_ANSI_V = 0x09. We also avoid Key::Unicode('v') (and thus
+            // Apple's Text Services Manager, which asserts main-thread-only and
+            // would SIGTRAP from this worker thread) by using the raw keycode.
+            Self::mac_paste_cmd_v()?;
 
             // CRITICAL: the Cmd+V CGEvent above is delivered asynchronously to
             // the frontmost app's run loop. The app reads NSPasteboard only
@@ -308,6 +296,39 @@ impl TextInjector {
 
             Ok(())
         }
+    }
+
+    /// Posts a Cmd+V paste chord on macOS using raw CoreGraphics events.
+    ///
+    /// The Command flag is set directly on the 'v' key-down/up events so the
+    /// modifier and key are delivered as one atomic chord. This avoids enigo's
+    /// separate-event modifier handling, which intermittently drops the flag
+    /// and causes a literal "v" to be typed instead of a paste.
+    #[cfg(target_os = "macos")]
+    fn mac_paste_cmd_v() -> Result<()> {
+        use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+        // kVK_ANSI_V
+        const KEY_V: core_graphics::event::CGKeyCode = 0x09;
+
+        let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+            .map_err(|_| InjectionError::TypeError("CGEventSource::new failed".into()))?;
+
+        let key_down = CGEvent::new_keyboard_event(source.clone(), KEY_V, true)
+            .map_err(|_| InjectionError::TypeError("CGEvent key-down failed".into()))?;
+        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_down.post(CGEventTapLocation::HID);
+
+        // Brief gap so the target app registers the down before the up.
+        thread::sleep(Duration::from_millis(15));
+
+        let key_up = CGEvent::new_keyboard_event(source, KEY_V, false)
+            .map_err(|_| InjectionError::TypeError("CGEvent key-up failed".into()))?;
+        key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_up.post(CGEventTapLocation::HID);
+
+        Ok(())
     }
 
     /// Injects text with a specified delay between characters.

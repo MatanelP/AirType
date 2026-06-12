@@ -66,6 +66,10 @@ keyring = { version = "3", features = ["sync-secret-service"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 # Secure secret storage on macOS
 keyring = { version = "3", features = ["apple-native"] }
+# Direct CGEvent posting for reliable Cmd+V paste (enigo's modifier-flag
+# tracking with raw keycodes is unreliable and sometimes types a literal "v").
+# Pinned to match the version enigo already pulls in.
+core-graphics = "0.23"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Secure secret storage on Windows
