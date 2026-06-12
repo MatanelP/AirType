@@ -8,7 +8,12 @@
 //! be used from a single thread. If you need concurrent access, wrap it in a
 //! Mutex or create separate instances per thread.
 
-use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+use enigo::{Enigo, Keyboard, Settings};
+// Direction/Key drive the enigo Ctrl+V paste on Linux/Windows. macOS pastes via
+// CGEvent (mac_paste_cmd_v) and never touches them, so the import is gated to
+// avoid an unused-import warning there.
+#[cfg(not(target_os = "macos"))]
+use enigo::{Direction, Key};
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
