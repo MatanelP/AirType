@@ -6,6 +6,6 @@ TODOs
 - on macos make sure the app can sart on login when the flag is set in the settings.
 - [IMPLEMENTED - UNDER REVIEW] self update - check for update and installs + auto update mechanism: Tauri updater plugin. Startup auto-check (toggle in Settings > Updates) emits update-available → banner in main window with Install & Restart (download progress bar). Manual "Check now" in settings. Backend commands check_for_update / download_and_install_update. CI signs updater artifacts + generates latest.json (needs TAURI_SIGNING_PRIVATE_KEY[_PASSWORD] secrets). Signing keypair generated at ~/.airtype-signing/airtype.key(.pub); pubkey embedded in tauri.conf.json.
 - changing hot key to alt, or control is crashing everything on macOS, need to fix that and thoghrly test. 
-- history trancribes 
-- x on  the last transcription in the ui to dismiss it
+- [IMPLEMENTED - UNDER REVIEW] history transcribes: disk-backed HistoryStore (history.json in config dir, max 100 entries). Each completed transcription prepended live via history-added event. Collapsible History panel in main UI with lang badge, timestamp, copy/delete per entry, Clear all. get/delete/clear_transcription_history commands.
+- [IMPLEMENTED - UNDER REVIEW] x on last transcription: dismiss button (×) added to the Last Transcription card. Clears lastTranscription state and calls clear_last_transcription backend command.
 

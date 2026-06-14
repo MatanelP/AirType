@@ -17,6 +17,9 @@
   let isTranscribing = $state(false);
   let recordingDuration = $state(0);
   let lastTranscription = $state('');
+  /** @type {Array<{id: number, text: string, language: string, timestamp: number}>} */
+  let history = $state([]);
+  let historyOpen = $state(false);
   let testResult = $state({ language: '', text: '' });
   let testingLanguage = $state('');
   /** @type {string | null} */
@@ -72,7 +75,14 @@
       } catch (err) {
         console.log('Using default settings');
       }
-      
+
+      // Load transcription history
+      try {
+        history = /** @type {any} */ (await invoke('get_transcription_history')) || [];
+      } catch (err) {
+        console.error('Failed to load history:', err);
+      }
+
       // Set up event listeners
       unlisteners.push(await listen('recording-started', () => {
         isRecording = true;
@@ -149,6 +159,12 @@
 
       unlisteners.push(await listen('update-progress', (event) => {
         updateProgress = Math.round(/** @type {number} */ (event.payload));
+      }));
+
+      // Prepend newly completed transcriptions to the history list.
+      unlisteners.push(await listen('history-added', (event) => {
+        const entry = /** @type {any} */ (event.payload);
+        history = [entry, ...history.filter(h => h.id !== entry.id)];
       }));
     })();
     
@@ -249,6 +265,49 @@
       updateError = String(e);
       updateInstalling = false;
     }
+  }
+
+  // Dismiss the "Last Transcription" card (history keeps the entry).
+  async function dismissLastTranscription() {
+    lastTranscription = '';
+    try {
+      await invoke('clear_last_transcription');
+    } catch (e) {
+      console.error('clear_last_transcription failed:', e);
+    }
+  }
+
+  /** @param {string} text */
+  function copyText(text) {
+    navigator.clipboard.writeText(text);
+  }
+
+  /** @param {number} id */
+  async function deleteHistoryEntry(id) {
+    history = history.filter(h => h.id !== id);
+    try {
+      await invoke('delete_transcription_entry', { id });
+    } catch (e) {
+      console.error('delete_transcription_entry failed:', e);
+    }
+  }
+
+  async function clearHistory() {
+    history = [];
+    try {
+      await invoke('clear_transcription_history');
+    } catch (e) {
+      console.error('clear_transcription_history failed:', e);
+    }
+  }
+
+  /** @param {number} ts seconds since epoch */
+  function formatHistoryTime(ts) {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
   }
 </script>
 
@@ -389,11 +448,55 @@
     <section class="transcription-preview animate-slideUp">
       <div class="preview-header">
         <span class="preview-label">Last Transcription</span>
-        <button class="copy-btn" onclick={() => navigator.clipboard.writeText(lastTranscription)}>
-          Copy
-        </button>
+        <div class="preview-actions">
+          <button class="copy-btn" onclick={() => copyText(lastTranscription)}>
+            Copy
+          </button>
+          <button class="dismiss-btn" onclick={dismissLastTranscription} aria-label="Dismiss last transcription" title="Dismiss">×</button>
+        </div>
       </div>
       <p class="preview-text">{lastTranscription}</p>
+    </section>
+  {/if}
+
+  <!-- Transcription History -->
+  {#if history.length > 0}
+    <section class="history-section">
+      <div
+        class="history-header"
+        role="button"
+        tabindex="0"
+        onclick={() => historyOpen = !historyOpen}
+        onkeydown={(e) => e.key === 'Enter' && (historyOpen = !historyOpen)}
+      >
+        <span class="history-title">History <span class="history-count">{history.length}</span></span>
+        <div class="history-header-actions">
+          {#if historyOpen}
+            <button class="history-clear-btn" onclick={(e) => { e.stopPropagation(); clearHistory(); }} title="Clear all">Clear all</button>
+          {/if}
+          <span class="history-chevron">{historyOpen ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {#if historyOpen}
+        <ul class="history-list" style={lastTranscription ? 'padding-bottom: 72px' : ''}>
+          {#each history as entry (entry.id)}
+            <li class="history-item">
+              <div class="history-item-main">
+                <div class="history-item-meta">
+                  <span class="history-lang">{entry.language === 'he' ? 'HE' : 'EN'}</span>
+                  <span class="history-time">{formatHistoryTime(entry.timestamp)}</span>
+                </div>
+                <p class="history-text">{entry.text}</p>
+              </div>
+              <div class="history-item-actions">
+                <button class="history-icon-btn" onclick={() => copyText(entry.text)} title="Copy" aria-label="Copy">⎘</button>
+                <button class="history-icon-btn" onclick={() => deleteHistoryEntry(entry.id)} title="Delete" aria-label="Delete">×</button>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
   {/if}
   
@@ -766,4 +869,147 @@
     color: #fca5a5;
     font-size: 0.75rem;
   }
+
+  /* preview-actions: copy + dismiss side by side */
+  .preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  /* History section */
+  .history-section {
+    flex-shrink: 0;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  .history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 1rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .history-header:hover .history-title { color: var(--color-text); }
+
+  .history-title {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .history-count {
+    background: var(--color-surface-elevated, #1a1a25);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    font-size: 0.5625rem;
+    padding: 0.05rem 0.45rem;
+    color: var(--color-text-muted);
+  }
+
+  .history-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .history-clear-btn {
+    background: none;
+    border: none;
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: var(--radius-sm, 4px);
+    transition: color 0.15s;
+  }
+  .history-clear-btn:hover { color: #fca5a5; }
+
+  .history-chevron {
+    font-size: 0.5rem;
+    color: var(--color-text-muted);
+  }
+
+  .history-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .history-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.45rem 1rem;
+    border-top: 1px solid var(--color-border);
+    transition: background 0.1s;
+  }
+  .history-item:hover { background: var(--color-surface-hover, rgba(255,255,255,0.03)); }
+
+  .history-item-main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .history-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.15rem;
+  }
+
+  .history-lang {
+    font-size: 0.5625rem;
+    font-weight: 600;
+    color: var(--color-primary, #6366f1);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .history-time {
+    font-size: 0.625rem;
+    color: var(--color-text-muted);
+  }
+
+  .history-text {
+    font-size: 0.8125rem;
+    color: var(--color-text);
+    line-height: 1.3;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .history-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .history-item:hover .history-item-actions { opacity: 1; }
+
+  .history-icon-btn {
+    background: none;
+    border: none;
+    padding: 0.2rem 0.3rem;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: var(--radius-sm, 4px);
+    transition: all 0.1s;
+  }
+  .history-icon-btn:hover { color: var(--color-text); background: var(--color-surface-hover, rgba(255,255,255,0.05)); }
 </style>

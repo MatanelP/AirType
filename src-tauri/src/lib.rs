@@ -13,6 +13,7 @@ use tauri::{
 };
 
 pub mod audio;
+pub mod history;
 pub mod hotkeys;
 pub mod injection;
 pub mod log_capture;
@@ -20,6 +21,7 @@ pub mod settings;
 pub mod transcription;
 
 use audio::AudioCapture;
+use history::{HistoryStore, TranscriptionEntry};
 use hotkeys::{
     build_global_shortcut_plugin, is_modifier_only_hotkey, HotkeyEvent, HotkeyManager,
     KeyboardListener, ModifierKey,
@@ -48,6 +50,8 @@ pub struct AppState {
     pub is_recording: RwLock<bool>,
     /// Last transcription result
     pub last_transcription: RwLock<String>,
+    /// Persistent transcription history
+    pub history: HistoryStore,
 }
 
 impl AppState {
@@ -60,6 +64,7 @@ impl AppState {
         if audio.is_none() {
             log::warn!("Audio capture not prewarmed at startup");
         }
+        let history = HistoryStore::new(SettingsStore::get_config_dir());
         Self {
             audio: RwLock::new(audio),
             recording_language: RwLock::new("en".to_string()),
@@ -68,6 +73,7 @@ impl AppState {
             settings_store: RwLock::new(settings_store),
             is_recording: RwLock::new(false),
             last_transcription: RwLock::new(String::new()),
+            history,
         }
     }
 
@@ -213,6 +219,10 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     let _ = app.emit("transcription-complete", &transcription);
 
     if !transcription.is_empty() {
+        // Record in persistent history and notify the UI to prepend it live.
+        let entry = state.history.add(&transcription, &language);
+        let _ = app.emit("history-added", &entry);
+
         log::info!("Injecting text: {}", transcription);
         let inject_result = tokio::task::spawn_blocking(move || {
             let mut injector = TextInjector::new().map_err(|e| format!("Failed to create injector: {}", e))?;
@@ -496,6 +506,30 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
 #[tauri::command]
 fn get_last_transcription(state: State<'_, AppState>) -> String {
     state.last_transcription.read().clone()
+}
+
+/// Clear the cached "last transcription" (used when the user dismisses the card)
+#[tauri::command]
+fn clear_last_transcription(state: State<'_, AppState>) {
+    *state.last_transcription.write() = String::new();
+}
+
+/// Get the full transcription history, most recent first
+#[tauri::command]
+fn get_transcription_history(state: State<'_, AppState>) -> Vec<TranscriptionEntry> {
+    state.history.all()
+}
+
+/// Delete a single history entry by id
+#[tauri::command]
+fn delete_transcription_entry(id: u64, state: State<'_, AppState>) {
+    state.history.delete(id);
+}
+
+/// Clear the entire transcription history
+#[tauri::command]
+fn clear_transcription_history(state: State<'_, AppState>) {
+    state.history.clear();
 }
 
 /// Check if currently recording
@@ -842,6 +876,10 @@ pub fn run() {
             get_settings,
             save_settings,
             get_last_transcription,
+            clear_last_transcription,
+            get_transcription_history,
+            delete_transcription_entry,
+            clear_transcription_history,
             is_recording,
             set_autostart,
             validate_openai_key,
