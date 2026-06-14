@@ -198,13 +198,18 @@
     recordingDuration = 0;
   }
   
-  async function toggleRecording() {
+  /** @param {'en' | 'he'} language */
+  async function startRecording(language) {
     try {
-      if (isRecording) {
-        await invoke('stop_recording');
-      } else {
-        await invoke('start_recording');
-      }
+      await invoke('start_recording', { language });
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  async function stopRecording() {
+    try {
+      await invoke('stop_recording');
     } catch (err) {
       error = String(err);
     }
@@ -366,28 +371,28 @@
       duration={recordingDuration} 
     />
     
-    <!-- Mode Badges -->
+    <!-- Mode Badge -->
     <div class="badges">
-      <span class="badge">{languageLabel}</span>
       <span class="badge">{modeLabel}</span>
     </div>
-    
-    <!-- Record Button (for manual control) -->
-    <button 
-      class="record-btn" 
-      class:recording={isRecording}
-      class:transcribing={isTranscribing}
-      onclick={toggleRecording}
-      disabled={isTranscribing}
-    >
-      {#if isTranscribing}
-        Processing...
-      {:else if isRecording}
-        Stop Recording
-      {:else}
-        Start Recording
-      {/if}
-    </button>
+
+    <!-- Record Buttons -->
+    {#if isTranscribing}
+      <button class="record-btn transcribing" disabled>Processing...</button>
+    {:else if isRecording}
+      <button class="record-btn recording" onclick={stopRecording}>
+        Stop Recording ({recordingLanguage === 'he' ? 'Hebrew' : 'English'})
+      </button>
+    {:else}
+      <div class="record-btns">
+        <button class="record-btn lang-btn" onclick={() => startRecording('en')}>
+          Record in English
+        </button>
+        <button class="record-btn lang-btn" onclick={() => startRecording('he')}>
+          Record in Hebrew
+        </button>
+      </div>
+    {/if}
 
     {#if showTestButtons}
       <div class="test-actions">
@@ -593,7 +598,14 @@
     letter-spacing: 0.05em;
   }
   
-  /* Record Button */
+  /* Record Buttons */
+  .record-btns {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
   .record-btn {
     padding: 0.875rem 2rem;
     background: var(--color-surface);
@@ -605,29 +617,33 @@
     cursor: pointer;
     transition: all var(--transition-normal);
   }
-  
-  .record-btn:hover:not(:disabled) {
+
+  .lang-btn {
+    padding: 0.875rem 1.5rem;
+  }
+
+.record-btn:hover:not(:disabled) {
     background: var(--color-surface-hover);
     border-color: var(--color-accent);
   }
-  
+
   .record-btn.recording {
     background: var(--color-recording);
     border-color: var(--color-recording);
     color: white;
   }
-  
+
   .record-btn.recording:hover {
     background: #dc2626;
   }
-  
+
   .record-btn.transcribing {
     background: var(--color-transcribing);
     border-color: var(--color-transcribing);
     color: white;
     cursor: not-allowed;
   }
-  
+
   .record-btn:disabled {
     opacity: 0.7;
   }

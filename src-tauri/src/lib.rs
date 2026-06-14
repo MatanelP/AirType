@@ -101,10 +101,13 @@ impl AppState {
 
 /// Start recording audio
 #[tauri::command]
-async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    log::info!("Starting recording (post-capture setup)...");
+async fn start_recording(state: State<'_, AppState>, app: AppHandle, language: Option<String>) -> Result<(), String> {
+    if let Some(lang) = language {
+        *state.recording_language.write() = lang;
+    }
 
     let language = state.recording_language.read().clone();
+    log::info!("Starting recording (post-capture setup) for language: {}", language);
 
     // Ensure capture is active.
     let capture = state.get_audio_capture()?;
@@ -116,8 +119,6 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle) -> Result<(
         let _ = app.emit("recording-started", ());
     }
     *state.is_recording.write() = true;
-
-    log::info!("Recording in progress for language: {}", language);
 
     Ok(())
 }
@@ -1061,7 +1062,7 @@ pub fn run() {
                                 // the case where mic capture is already running.
                                 tauri::async_runtime::spawn(async move {
                                     let state = app.state::<AppState>();
-                                    if let Err(e) = start_recording(state, app.clone()).await {
+                                    if let Err(e) = start_recording(state, app.clone(), None).await {
                                         log::error!("Failed to start recording: {}", e);
                                         let _ = app.emit("error", e);
                                         hide_indicator(&app);
