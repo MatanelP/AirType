@@ -2,60 +2,52 @@
   // @ts-nocheck
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  
-  let state = $state('recording');
+
+  let state = $state('idle');
   let language = $state('en');
-  
+  let curGen = -1;
+
   onMount(() => {
-    listen('indicator-show', (e) => {
-      language = e.payload?.language || 'en';
-      state = 'recording';
+    // Single unified event from the backend — stale sessions are dropped by
+    // comparing the generation counter.
+    listen('phase-changed', (e) => {
+      const { phase, language: lang, generation } = e.payload;
+      if (generation < curGen) return; // discard stale
+      curGen = generation;
+      language = lang || 'en';
+      state = phase; // idle | recording | processing | done
     });
 
-    listen('indicator-warming-up', () => {
-      state = 'warming_up';
-    });
-
-    listen('indicator-transcribing', () => {
-      state = 'transcribing';
-    });
-
-    listen('indicator-done', () => {
-      state = 'done';
-    });
-
+    // indicator-hide is still emitted by hide_indicator to force-hide the window.
     listen('indicator-hide', () => {
-      state = 'recording';
+      state = 'idle';
     });
   });
 
   let gradient = $derived(
     state === 'recording'   ? 'linear-gradient(135deg, #f87171 0%, #ef4444 100%)' :
-    state === 'warming_up'  ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
-    state === 'transcribing'? 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%)' :
+    state === 'processing'  ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
     state === 'done'        ? 'linear-gradient(135deg, #4ade80 0%, #22c55e 100%)' :
-    'linear-gradient(135deg, #f87171 0%, #ef4444 100%)'
+    'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)'
   );
 
   let icon = $derived(
-    state === 'recording'    ? '●' :
-    state === 'warming_up'   ? '◌' :
-    state === 'transcribing' ? '◐' :
-    state === 'done'         ? '✓' : '●'
+    state === 'recording'  ? '●' :
+    state === 'processing' ? '◐' :
+    state === 'done'       ? '✓' : '●'
   );
 
   let label = $derived(
-    state === 'recording'    ? (language === 'he' ? 'מקליט'   : 'Recording') :
-    state === 'warming_up'   ? (language === 'he' ? 'מתחמם'   : 'Warming up') :
-    state === 'transcribing' ? (language === 'he' ? 'מעבד'    : 'Processing') :
-    state === 'done'         ? (language === 'he' ? 'בוצע'    : 'Done') :
+    state === 'recording'  ? (language === 'he' ? 'מקליט'  : 'Recording')   :
+    state === 'processing' ? (language === 'he' ? 'מעבד'   : 'Processing')  :
+    state === 'done'       ? (language === 'he' ? 'בוצע'   : 'Done')        :
     'Recording'
   );
 </script>
 
 <div class="wrap">
   <div class="indicator" style="background: {gradient};">
-    <span class="icon" class:pulse={state === 'recording' || state === 'warming_up'} class:spin={state === 'transcribing'}>
+    <span class="icon" class:pulse={state === 'recording'} class:spin={state === 'processing'}>
       {icon}
     </span>
     <span class="label">{label}</span>
@@ -70,8 +62,6 @@
     background: transparent;
   }
 
-  /* Wrapper fills the window; the pill inside has margin so the rounded
-     edges and the box-shadow are never clipped by the window bounds. */
   .wrap {
     width: 100%;
     height: 100%;
@@ -90,22 +80,22 @@
     justify-content: center;
     gap: 6px;
     border-radius: 18px;
-    transition: background 0.3s ease;
+    transition: background 0.12s ease;
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   }
-  
+
   .icon, .label {
     color: white;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     text-shadow: 0 1px 2px rgba(0,0,0,0.2);
   }
-  
+
   .icon { font-size: 10px; }
   .label { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
-  
+
   .icon.pulse { animation: pulse 1s infinite; }
-  .icon.spin { animation: spin 1s linear infinite; display: inline-block; }
-  
+  .icon.spin  { animation: spin 1s linear infinite; display: inline-block; }
+
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes spin  { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 </style>

@@ -83,59 +83,57 @@
         console.error('Failed to load history:', err);
       }
 
-      // Set up event listeners
-      unlisteners.push(await listen('recording-started', () => {
-        isRecording = true;
-        startDurationTimer();
-      }));
-      
-      unlisteners.push(await listen('recording-stopped', () => {
-        isRecording = false;
-        isTranscribing = true;
-        stopDurationTimer();
-      }));
-      
-      unlisteners.push(await listen('transcription-partial', (event) => {
-        lastTranscription = /** @type {string} */ (event.payload);
-      }));
-      
-      unlisteners.push(await listen('transcription-complete', (event) => {
-        lastTranscription = /** @type {string} */ (event.payload);
-        isTranscribing = false;
-      }));
-      
-      unlisteners.push(await listen('error', (event) => {
-        error = /** @type {string} */ (event.payload);
-        isRecording = false;
-        isTranscribing = false;
-        stopDurationTimer();
-      }));
-      
-      // Listen for indicator events from backend
-      unlisteners.push(await listen('indicator-show', (event) => {
-        const data = /** @type {{language: string}} */ (event.payload);
-        isRecording = true;
-        recordingLanguage = data.language || 'en';
-        indicatorState = 'recording';
-        startDurationTimer();
-      }));
-      
-      unlisteners.push(await listen('indicator-warming-up', () => {
-        indicatorState = 'warming_up';
-        isTranscribing = true;
+      // Unified phase state — single source of truth for the UI.
+      // A generation guard prevents stale events from old sessions from
+      // resetting the UI mid-recording.
+      let curGen = -1;
+      unlisteners.push(await listen('phase-changed', (event) => {
+        const { phase, language: lang, generation } = /** @type {{phase:string,language:string,generation:number}} */ (event.payload);
+        if (generation < curGen) return; // stale — drop
+        curGen = generation;
+        recordingLanguage = lang || recordingLanguage;
+
+        if (phase === 'recording') {
+          isRecording = true;
+          isTranscribing = false;
+          indicatorState = 'recording';
+          startDurationTimer();
+        } else if (phase === 'processing') {
+          isRecording = false;
+          isTranscribing = true;
+          indicatorState = 'transcribing';
+          stopDurationTimer();
+        } else if (phase === 'done') {
+          isRecording = false;
+          isTranscribing = false;
+          indicatorState = 'done';
+          stopDurationTimer();
+        } else { // idle
+          isRecording = false;
+          isTranscribing = false;
+          indicatorState = 'idle';
+          stopDurationTimer();
+        }
       }));
 
-      unlisteners.push(await listen('indicator-transcribing', () => {
-        indicatorState = 'transcribing';
-        isTranscribing = true;
-      }));
-      
-      unlisteners.push(await listen('indicator-done', () => {
-        indicatorState = 'done';
-      }));
-      
       unlisteners.push(await listen('indicator-hide', () => {
         indicatorState = 'idle';
+        isRecording = false;
+        isTranscribing = false;
+        stopDurationTimer();
+      }));
+
+      // Side-effect-only listeners (don't set recording/transcribing state).
+      unlisteners.push(await listen('recording-started', () => {
+        startDurationTimer();
+      }));
+
+      unlisteners.push(await listen('transcription-complete', (event) => {
+        lastTranscription = /** @type {string} */ (event.payload);
+      }));
+
+      unlisteners.push(await listen('error', (event) => {
+        error = /** @type {string} */ (event.payload);
         isRecording = false;
         isTranscribing = false;
         stopDurationTimer();
@@ -335,12 +333,22 @@
   {#if availableUpdate && !updateDismissed}
     <div class="update-banner">
       {#if updateInstalling}
-        <span>⬇️ <strong>Updating to v{availableUpdate.version}…</strong> {updateProgress}%</span>
+        <span>
+          <svg class="banner-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+          </svg>
+          <strong>Updating to v{availableUpdate.version}…</strong> {updateProgress}%
+        </span>
         <div class="update-progress-track">
           <div class="update-progress-fill" style="width: {updateProgress}%"></div>
         </div>
       {:else}
-        <span>🚀 <strong>Update available</strong> — v{availableUpdate.version} is ready to install.</span>
+        <span>
+          <svg class="banner-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>
+          </svg>
+          <strong>Update available</strong> — v{availableUpdate.version} is ready to install.
+        </span>
         <div class="update-actions">
           <button class="update-btn" onclick={installUpdate}>Install &amp; Restart</button>
           <button class="update-dismiss" onclick={() => updateDismissed = true} aria-label="Dismiss">Later</button>
@@ -355,7 +363,13 @@
   <!-- Accessibility Permission Banner -->
   {#if needsAccessibility}
     <div class="accessibility-banner">
-      <span>⚠️ <strong>Accessibility access needed</strong> — text injection won't work without it.</span>
+      <span>
+        <svg class="banner-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <strong>Accessibility access needed</strong> — text injection won't work without it.
+      </span>
       <button class="accessibility-btn" onclick={openAccessibilitySettings}>
         Open System Settings
       </button>
@@ -780,6 +794,12 @@
   }
 
   /* Accessibility permission banner */
+  .accessibility-banner > span {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
   .accessibility-banner {
     display: flex;
     align-items: center;
@@ -827,7 +847,10 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    justify-content: space-between;
+  }
+
+  .banner-icon {
+    flex-shrink: 0;
   }
 
   .update-actions {
