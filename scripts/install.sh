@@ -113,7 +113,7 @@ install_linux() {
         *)            err "unsupported Linux arch: $ARCH (only x86_64 is published)" ;;
     esac
 
-    launch_cmd="AirType"
+    launch_cmd="airtype"
     # Prefer package managers if present, else fall back to AppImage.
     # Use reinstall-style flags so re-running this script always results
     # in the downloaded version being the installed version, even when
