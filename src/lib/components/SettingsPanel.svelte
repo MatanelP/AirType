@@ -33,6 +33,11 @@
 
   onMount(() => {
     getVersion().then((v) => { appVersion = v; }).catch(() => {});
+    let unlisten;
+    listen('update-progress', (event) => {
+      updateProgress = Math.round(event.payload);
+    }).then((fn) => { unlisten = fn; });
+    return () => { if (unlisten) unlisten(); };
   });
 
   async function refreshSettings() {
@@ -101,11 +106,14 @@
     isSaving = true;
     const prevEnHotkey = settings.hotkey_english;
     const prevHeHotkey = settings.hotkey_hebrew;
+    const prevMode = settings.hotkey_mode;
     try {
       await invoke('save_settings', { settings: localSettings });
       onSettingsChange(localSettings);
-      // Re-register hotkeys if they changed
-      if (localSettings.hotkey_english !== prevEnHotkey || localSettings.hotkey_hebrew !== prevHeHotkey) {
+      // Re-register hotkeys if the keys or the mode (hold/toggle) changed
+      if (localSettings.hotkey_english !== prevEnHotkey
+          || localSettings.hotkey_hebrew !== prevHeHotkey
+          || localSettings.hotkey_mode !== prevMode) {
         await invoke('update_hotkeys').catch(e => console.error('update_hotkeys failed:', e));
       }
     } catch (e) {
@@ -236,8 +244,11 @@
   }
 
   // ── Updates ───────────────────────────────────────────────────────────────
-  let updateCheckState = $state('idle'); // idle | checking | available | uptodate | error
+  // idle | checking | available | uptodate | installing | error
+  let updateCheckState = $state('idle');
   let updateCheckMsg = $state('');
+  let availableVersion = $state('');
+  let updateProgress = $state(0);
 
   async function checkForUpdates() {
     updateCheckState = 'checking';
@@ -245,12 +256,26 @@
     try {
       const update = await invoke('check_for_update');
       if (update) {
+        availableVersion = update.version;
         updateCheckState = 'available';
-        updateCheckMsg = `v${update.version} is available — close Settings to install it.`;
+        updateCheckMsg = `Version ${update.version} is available.`;
       } else {
         updateCheckState = 'uptodate';
         updateCheckMsg = `You're on the latest version (v${appVersion}).`;
       }
+    } catch (e) {
+      updateCheckState = 'error';
+      updateCheckMsg = String(e);
+    }
+  }
+
+  async function installUpdate() {
+    updateCheckState = 'installing';
+    updateProgress = 0;
+    updateCheckMsg = '';
+    try {
+      // Downloads, installs and relaunches — does not return on success.
+      await invoke('download_and_install_update');
     } catch (e) {
       updateCheckState = 'error';
       updateCheckMsg = String(e);
@@ -669,14 +694,30 @@
               <span class="setting-label">Manual check</span>
               <span class="setting-desc">Check GitHub releases for an update right now</span>
             </div>
-            <button
-              class="update-check-btn"
-              onclick={checkForUpdates}
-              disabled={updateCheckState === 'checking'}
-            >
-              {updateCheckState === 'checking' ? 'Checking…' : 'Check now'}
-            </button>
+            {#if updateCheckState === 'available'}
+              <button class="update-check-btn primary" onclick={installUpdate}>
+                Install &amp; restart
+              </button>
+            {:else if updateCheckState === 'installing'}
+              <button class="update-check-btn" disabled>
+                Installing… {updateProgress}%
+              </button>
+            {:else}
+              <button
+                class="update-check-btn"
+                onclick={checkForUpdates}
+                disabled={updateCheckState === 'checking'}
+              >
+                {updateCheckState === 'checking' ? 'Checking…' : 'Check now'}
+              </button>
+            {/if}
           </div>
+
+          {#if updateCheckState === 'installing'}
+            <div class="update-progress-track">
+              <div class="update-progress-fill" style="width: {updateProgress}%"></div>
+            </div>
+          {/if}
 
           {#if updateCheckMsg}
             <p class="update-check-msg" class:err={updateCheckState === 'error'}>{updateCheckMsg}</p>
@@ -1243,17 +1284,48 @@
 
   .update-check-btn {
     white-space: nowrap;
-    padding: 0.4rem 0.9rem;
+    padding: 0.3rem 0.7rem;
     background: var(--color-surface-elevated, #1a1a25);
-    border: 1px solid var(--color-primary, #6366f1);
-    border-radius: var(--radius-md, 8px);
-    color: var(--color-primary, #6366f1);
-    font-size: 0.8125rem;
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-sm, 6px);
+    color: var(--color-text-muted, #8888a0);
+    font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
     transition: all 0.15s;
   }
-  .update-check-btn:hover:not(:disabled) { background: rgba(99, 102, 241, 0.12); }
+  .update-check-btn:hover:not(:disabled) {
+    background: var(--color-surface-hover, #252530);
+    border-color: var(--color-primary, #6366f1);
+    color: var(--color-text, #f0f0f5);
+  }
   .update-check-btn:disabled { opacity: 0.6; cursor: default; }
+
+  .update-check-btn.primary {
+    background: var(--color-primary, #6366f1);
+    border-color: var(--color-primary, #6366f1);
+    color: #fff;
+  }
+  .update-check-btn.primary:hover:not(:disabled) {
+    background: #4f46e5;
+    border-color: #4f46e5;
+    color: #fff;
+  }
+
+  .update-progress-track {
+    width: 100%;
+    height: 4px;
+    margin-top: 0.5rem;
+    background: rgba(99, 102, 241, 0.2);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .update-progress-fill {
+    height: 100%;
+    background: var(--color-primary, #6366f1);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+  }
 
   .update-check-msg {
     margin: 0.5rem 0 0;
