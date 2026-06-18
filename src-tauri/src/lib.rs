@@ -34,6 +34,21 @@ use transcription::{
 };
 use tauri_plugin_updater::UpdaterExt;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// High-level recording phase. This is the single source of truth that drives
+/// both the floating indicator and the main-window UI, and gates hotkey actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingPhase {
+    /// Not recording and nothing in flight
+    Idle,
+    /// Microphone is capturing audio
+    Recording,
+    /// Recording stopped; transcription/injection in flight
+    Processing,
+}
+
 /// Application state shared across all Tauri commands
 pub struct AppState {
     /// Audio capture instance
@@ -46,8 +61,13 @@ pub struct AppState {
     pub keyboard_listener: Arc<KeyboardListener>,
     /// Settings store
     pub settings_store: RwLock<SettingsStore>,
-    /// Whether currently recording
+    /// Whether currently recording (kept in sync with `phase` for existing read sites)
     pub is_recording: RwLock<bool>,
+    /// Authoritative recording phase (Idle/Recording/Processing)
+    pub phase: RwLock<RecordingPhase>,
+    /// Monotonic session counter. Incremented on each recording start so that
+    /// delayed/async emissions from an old session can be discarded.
+    pub generation: AtomicU64,
     /// Last transcription result
     pub last_transcription: RwLock<String>,
     /// Persistent transcription history
@@ -72,6 +92,8 @@ impl AppState {
             keyboard_listener,
             settings_store: RwLock::new(settings_store),
             is_recording: RwLock::new(false),
+            phase: RwLock::new(RecordingPhase::Idle),
+            generation: AtomicU64::new(0),
             last_transcription: RwLock::new(String::new()),
             history,
         }
@@ -80,6 +102,34 @@ impl AppState {
     /// Get the current settings
     pub fn get_settings(&self) -> Settings {
         self.settings_store.read().get()
+    }
+
+    pub fn current_phase(&self) -> RecordingPhase {
+        *self.phase.read()
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Transition to Recording. Returns the new generation number.
+    pub fn begin_recording(&self) -> u64 {
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.phase.write() = RecordingPhase::Recording;
+        *self.is_recording.write() = true;
+        gen
+    }
+
+    /// Transition to Processing (mic stopped, transcription in flight).
+    pub fn begin_processing(&self) {
+        *self.phase.write() = RecordingPhase::Processing;
+        *self.is_recording.write() = false;
+    }
+
+    /// Transition back to Idle.
+    pub fn finish(&self) {
+        *self.phase.write() = RecordingPhase::Idle;
+        *self.is_recording.write() = false;
     }
 
     fn get_audio_capture(&self) -> Result<Arc<AudioCapture>, String> {
@@ -96,12 +146,40 @@ impl AppState {
 }
 
 // ============================================================================
+// Phase helpers
+// ============================================================================
+
+/// Emit a unified `phase-changed` event consumed by both the indicator and main windows.
+/// `visual_phase` is the string sent to the UI ("idle","recording","processing","done").
+fn emit_phase<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    visual_phase: &str,
+    language: &str,
+    generation: u64,
+) {
+    let _ = app.emit(
+        "phase-changed",
+        serde_json::json!({
+            "phase": visual_phase,
+            "language": language,
+            "generation": generation,
+        }),
+    );
+}
+
+// ============================================================================
 // Tauri Commands
 // ============================================================================
 
 /// Start recording audio
 #[tauri::command]
 async fn start_recording(state: State<'_, AppState>, app: AppHandle, language: Option<String>) -> Result<(), String> {
+    // Block if transcription is already in flight.
+    if state.current_phase() == RecordingPhase::Processing {
+        log::info!("start_recording: blocked — processing in flight");
+        return Ok(());
+    }
+
     if let Some(lang) = language {
         *state.recording_language.write() = lang;
     }
@@ -116,9 +194,10 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle, language: O
         capture
             .start_recording()
             .map_err(|e| format!("Failed to start recording: {}", e))?;
-        let _ = app.emit("recording-started", ());
     }
-    *state.is_recording.write() = true;
+    let gen = state.begin_recording();
+    let _ = app.emit("recording-started", ());
+    emit_phase(&app, "recording", &language, gen);
 
     Ok(())
 }
@@ -128,14 +207,13 @@ async fn start_recording(state: State<'_, AppState>, app: AppHandle, language: O
 async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<String, String> {
     log::info!("Stopping recording...");
 
-    // Check if recording
-    if !*state.is_recording.read() {
+    if state.current_phase() != RecordingPhase::Recording {
         return Err("Not recording".to_string());
     }
 
     let settings = state.get_settings();
+    let language = state.recording_language.read().clone();
 
-    // Get audio samples and stop capture
     let capture = {
         state
             .audio
@@ -149,26 +227,30 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
         .stop_recording()
         .map_err(|e| format!("Failed to stop recording: {}", e))?;
 
-    *state.is_recording.write() = false;
+    // Transition to Processing immediately so rapid presses are blocked.
+    state.begin_processing();
+    let gen = state.current_generation();
     let _ = app.emit("recording-stopped", ());
+    emit_phase(&app, "processing", &language, gen);
 
     if samples.is_empty() {
         log::warn!("No audio samples captured");
-        hide_indicator(&app);
+        state.finish();
+        hide_indicator(&app, gen);
         return Ok(String::new());
     }
 
-    let language = state.recording_language.read().clone();
     log::info!("Captured {} audio samples for {} (Batch)", samples.len(), language);
-    let _ = app.emit("transcribing", ());
 
-    // Build a status callback that drives the indicator through warming_up → transcribing.
-    // For OpenAI there is no cold-start concept so we emit transcribing immediately instead.
     let app_cb = app.clone();
-    let status_cb = move |status: &str| match status {
-        "warming_up" => indicator_warming_up(&app_cb),
-        "processing"  => indicator_transcribing(&app_cb),
-        _ => {}
+    let lang_cb = language.clone();
+    let status_cb = move |status: &str| {
+        let vphase = match status {
+            "warming_up" => "processing",
+            "processing"  => "processing",
+            _ => return,
+        };
+        emit_phase(&app_cb, vphase, &lang_cb, gen);
     };
 
     let transcription = if language == "he" {
@@ -203,8 +285,7 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                 transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
             }
             EnglishEndpointType::OpenAI => {
-                // OpenAI has no cold-start delay — go straight to transcribing.
-                indicator_transcribing(&app);
+                emit_phase(&app, "processing", &language, gen);
                 let openai_key = settings.english_openai_api_key
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "OpenAI API key not set. Go to Settings to add it.".to_string())?;
@@ -220,7 +301,6 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     let _ = app.emit("transcription-complete", &transcription);
 
     if !transcription.is_empty() {
-        // Record in persistent history and notify the UI to prepend it live.
         let entry = state.history.add(&transcription, &language);
         let _ = app.emit("history-added", &entry);
 
@@ -241,7 +321,9 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
         let _ = app.emit("text-injected", ());
     }
 
-    indicator_done(&app);
+    state.finish();
+    emit_phase(&app, "done", &language, gen);
+    hide_indicator(&app, gen);
     Ok(state.last_transcription.read().clone())
 }
 
@@ -357,17 +439,21 @@ fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
     if let Some(modifier) = ModifierKey::from_str(&english_hotkey) {
         let mode = hotkey_mode;
         keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
+            let phase = app_en.state::<AppState>().current_phase();
             if pressed {
-                prewarm_capture(&app_en, "en");
+                match (mode, phase) {
+                    (_, RecordingPhase::Processing) => {}
+                    (settings::HotkeyMode::Toggle, RecordingPhase::Recording) => {
+                        let _ = app_en.emit("hotkey-event", &HotkeyEvent::RecordingStop);
+                    }
+                    _ => {
+                        prewarm_capture(&app_en, "en");
+                        let _ = app_en.emit("hotkey-event", &HotkeyEvent::RecordingStart { language: "en".to_string() });
+                    }
+                }
+            } else if mode == settings::HotkeyMode::Hold && phase == RecordingPhase::Recording {
+                let _ = app_en.emit("hotkey-event", &HotkeyEvent::RecordingStop);
             }
-            let event = if pressed {
-                HotkeyEvent::RecordingStart { language: "en".to_string() }
-            } else if mode == settings::HotkeyMode::Hold {
-                HotkeyEvent::RecordingStop
-            } else {
-                return;
-            };
-            let _ = app_en.emit("hotkey-event", &event);
         });
         log::info!("Registered modifier English hotkey: {:?}", modifier);
     }
@@ -376,17 +462,21 @@ fn update_hotkeys(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
         let mode = hotkey_mode;
         let app_he = app.clone();
         keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
+            let phase = app_he.state::<AppState>().current_phase();
             if pressed {
-                prewarm_capture(&app_he, "he");
+                match (mode, phase) {
+                    (_, RecordingPhase::Processing) => {}
+                    (settings::HotkeyMode::Toggle, RecordingPhase::Recording) => {
+                        let _ = app_he.emit("hotkey-event", &HotkeyEvent::RecordingStop);
+                    }
+                    _ => {
+                        prewarm_capture(&app_he, "he");
+                        let _ = app_he.emit("hotkey-event", &HotkeyEvent::RecordingStart { language: "he".to_string() });
+                    }
+                }
+            } else if mode == settings::HotkeyMode::Hold && phase == RecordingPhase::Recording {
+                let _ = app_he.emit("hotkey-event", &HotkeyEvent::RecordingStop);
             }
-            let event = if pressed {
-                HotkeyEvent::RecordingStart { language: "he".to_string() }
-            } else if mode == settings::HotkeyMode::Hold {
-                HotkeyEvent::RecordingStop
-            } else {
-                return;
-            };
-            let _ = app_he.emit("hotkey-event", &event);
         });
         log::info!("Registered modifier Hebrew hotkey: {:?}", modifier);
     }
@@ -563,7 +653,8 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
 /// meantime are buffered and forwarded once the session is ready.
 fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     let state = app.state::<AppState>();
-    if *state.is_recording.read() {
+    // Block if already active or transcription is in flight.
+    if state.current_phase() != RecordingPhase::Idle {
         return;
     }
     *state.recording_language.write() = language.to_string();
@@ -581,8 +672,10 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     capture.clear_stream_sender();
     match capture.start_recording() {
         Ok(_) => {
-            *state.is_recording.write() = true;
+            let gen = state.begin_recording();
             let _ = app.emit("recording-started", ());
+            // Optimistic paint: show recording phase immediately on keypress.
+            emit_phase(app, "recording", language, gen);
             log::info!("Mic capture pre-warmed (language={})", language);
         }
         Err(e) => {
@@ -591,8 +684,9 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     }
 }
 
-/// Show the floating indicator window using current indicator settings
-fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
+/// Show the floating indicator window using current indicator settings.
+/// `gen` is the session generation so the indicator knows which session this belongs to.
+fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str, gen: u64) {
     log::info!("Showing indicator for language: {}", language);
 
     let settings = app.state::<AppState>().get_settings();
@@ -604,16 +698,14 @@ fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
 
     let app_clone = app.clone();
 
-    // Emit event first so the indicator webview can update its state
-    let _ = app.emit("indicator-show", serde_json::json!({ "language": language }));
+    // Emit unified phase event so both windows update instantly.
+    emit_phase(app, "recording", language, gen);
 
     // Run window operations on main thread to avoid X11 threading issues
     let _ = app.run_on_main_thread(move || {
         if let Some(indicator) = app_clone.get_webview_window("indicator") {
-            // Resize to configured dimensions
             let _ = indicator.set_size(tauri::Size::Logical(tauri::LogicalSize { width: win_w, height: win_h }));
 
-            // Position using configured alignment + offsets
             if let Ok(Some(monitor)) = indicator.primary_monitor() {
                 let size = monitor.size();
                 let scale = monitor.scale_factor();
@@ -640,11 +732,12 @@ fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
 #[tauri::command]
 fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
     let language = state.recording_language.read().clone();
-    show_indicator(&app, &language);
+    let gen = state.current_generation();
+    show_indicator(&app, &language, gen);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        hide_indicator(&app_clone);
+        hide_indicator(&app_clone, gen);
     });
 }
 
@@ -764,35 +857,20 @@ fn spawn_startup_update_check(app: &AppHandle) {
     });
 }
 
-/// Update indicator to show "Warming up" state (RunPod cold start)
-fn indicator_warming_up<R: tauri::Runtime>(app: &AppHandle<R>) {
-    log::info!("Indicator: Warming up...");
-    let _ = app.emit("indicator-warming-up", ());
-}
-
-/// Update indicator to show "Transcribing" state
-fn indicator_transcribing<R: tauri::Runtime>(app: &AppHandle<R>) {
-    log::info!("Indicator: Transcribing...");
-    let _ = app.emit("indicator-transcribing", ());
-}
-
-/// Show "Done!" state on indicator
-fn indicator_done<R: tauri::Runtime>(app: &AppHandle<R>) {
-    log::info!("Indicator: Done!");
-    let _ = app.emit("indicator-done", ());
-}
-
-/// Hide the floating indicator window
-fn hide_indicator<R: tauri::Runtime>(app: &AppHandle<R>) {
-    log::info!("Hiding indicator");
-    indicator_done(app);
-    
-    // Hide after delay, on main thread
+/// Hide the floating indicator window. The `gen` guard ensures a delayed hide
+/// from an old session never clobbers a new session that started in the meantime.
+fn hide_indicator<R: tauri::Runtime>(app: &AppHandle<R>, gen: u64) {
+    log::info!("Hiding indicator (gen={})", gen);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        // Short done flash (~400 ms) then hide — but only if no new session started.
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let state = app_clone.state::<AppState>();
+        if state.current_generation() != gen {
+            log::info!("hide_indicator: stale gen {}, skipping hide", gen);
+            return;
+        }
         let _ = app_clone.emit("indicator-hide", ());
-        
         let app_inner = app_clone.clone();
         let _ = app_clone.run_on_main_thread(move || {
             if let Some(indicator) = app_inner.get_webview_window("indicator") {
@@ -951,26 +1029,28 @@ pub fn run() {
                     let mode = hotkey_mode;
                     keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
                         log::info!("English modifier callback: pressed={}", pressed);
+                        let phase = app_clone.state::<AppState>().current_phase();
                         if pressed {
-                            // Start the microphone synchronously on the listener
-                            // thread so that audio capture begins within
-                            // milliseconds of the physical keypress. Any
-                            // buffered samples will be forwarded to the
-                            // transcription session once it is set up.
-                            prewarm_capture(&app_clone, "en");
+                            match (mode, phase) {
+                                (_, RecordingPhase::Processing) => {
+                                    log::info!("Modifier EN: blocked — processing");
+                                }
+                                (settings::HotkeyMode::Toggle, RecordingPhase::Recording) => {
+                                    log::info!("Toggle EN: stopping");
+                                    let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStop);
+                                }
+                                _ => {
+                                    log::info!("Modifier EN: starting");
+                                    prewarm_capture(&app_clone, "en");
+                                    let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStart { language: "en".to_string() });
+                                }
+                            }
+                        } else if mode == settings::HotkeyMode::Hold && phase == RecordingPhase::Recording {
+                            let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStop);
                         }
-                        let event = if pressed {
-                            HotkeyEvent::RecordingStart { language: "en".to_string() }
-                        } else if mode == settings::HotkeyMode::Hold {
-                            HotkeyEvent::RecordingStop
-                        } else {
-                            return; // Toggle mode only responds to press
-                        };
-                        log::info!("Emitting hotkey event: {:?}", event);
-                        let _ = app_clone.emit("hotkey-event", &event);
                     });
                 }
-                
+
                 // Check if Hebrew hotkey is a modifier-only key
                 if let Some(modifier) = ModifierKey::from_str(&hebrew_hotkey) {
                     log::info!("Registering modifier-only hotkey for Hebrew: {:?}", modifier);
@@ -978,18 +1058,25 @@ pub fn run() {
                     let mode = hotkey_mode;
                     keyboard_listener.register_modifier_hotkey(modifier, move |_key, pressed| {
                         log::info!("Hebrew modifier callback: pressed={}", pressed);
+                        let phase = app_clone.state::<AppState>().current_phase();
                         if pressed {
-                            prewarm_capture(&app_clone, "he");
+                            match (mode, phase) {
+                                (_, RecordingPhase::Processing) => {
+                                    log::info!("Modifier HE: blocked — processing");
+                                }
+                                (settings::HotkeyMode::Toggle, RecordingPhase::Recording) => {
+                                    log::info!("Toggle HE: stopping");
+                                    let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStop);
+                                }
+                                _ => {
+                                    log::info!("Modifier HE: starting");
+                                    prewarm_capture(&app_clone, "he");
+                                    let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStart { language: "he".to_string() });
+                                }
+                            }
+                        } else if mode == settings::HotkeyMode::Hold && phase == RecordingPhase::Recording {
+                            let _ = app_clone.emit("hotkey-event", &HotkeyEvent::RecordingStop);
                         }
-                        let event = if pressed {
-                            HotkeyEvent::RecordingStart { language: "he".to_string() }
-                        } else if mode == settings::HotkeyMode::Hold {
-                            HotkeyEvent::RecordingStop
-                        } else {
-                            return; // Toggle mode only responds to press
-                        };
-                        log::info!("Emitting hotkey event: {:?}", event);
-                        let _ = app_clone.emit("hotkey-event", &event);
                     });
                 }
                 
@@ -1021,28 +1108,29 @@ pub fn run() {
                                 log::info!("Hotkey: Start recording in {}", language);
                                 let state = app.state::<AppState>();
 
-                                // Store current recording language
+                                // Block if processing is in flight.
+                                if state.current_phase() == RecordingPhase::Processing {
+                                    log::info!("Hotkey RecordingStart: blocked — processing in flight");
+                                    return;
+                                }
+
                                 *state.recording_language.write() = language.clone();
 
-                                // Start the microphone if not already running
-                                // (prewarm_capture may have already started it
-                                // and set is_recording = true).
-                                if !*state.is_recording.read() {
+                                // Start microphone if prewarm didn't already do it.
+                                if state.current_phase() == RecordingPhase::Idle {
                                     match state.get_audio_capture() {
                                         Ok(capture) => {
                                             if !capture.is_recording() {
                                                 capture.clear_stream_sender();
                                                 if let Err(e) = capture.start_recording() {
-                                                    log::error!(
-                                                        "Failed to start mic capture: {}",
-                                                        e
-                                                    );
+                                                    log::error!("Failed to start mic capture: {}", e);
                                                     let _ = app.emit("error", e.to_string());
                                                     return;
                                                 }
                                             }
-                                            *state.is_recording.write() = true;
+                                            let gen = state.begin_recording();
                                             let _ = app.emit("recording-started", ());
+                                            emit_phase(&app, "recording", &language, gen);
                                         }
                                         Err(e) => {
                                             log::error!("No audio capture: {}", e);
@@ -1052,51 +1140,38 @@ pub fn run() {
                                     }
                                 }
 
-                                // Show indicator after mic is live
-                                show_indicator(&app, &language);
-
+                                let gen = state.current_generation();
+                                show_indicator(&app, &language, gen);
                                 let _ = app.emit("language-changed", &language);
 
-                                // Spawn the session setup (WebSocket connect, etc.).
-                                // start_recording is idempotent — it handles
-                                // the case where mic capture is already running.
                                 tauri::async_runtime::spawn(async move {
                                     let state = app.state::<AppState>();
                                     if let Err(e) = start_recording(state, app.clone(), None).await {
                                         log::error!("Failed to start recording: {}", e);
                                         let _ = app.emit("error", e);
-                                        hide_indicator(&app);
+                                        let gen = app.state::<AppState>().current_generation();
+                                        hide_indicator(&app, gen);
                                     }
                                 });
                             }
                             HotkeyEvent::RecordingStop => {
                                 log::info!("Hotkey: Stop recording");
                                 let state = app.state::<AppState>();
-                                if *state.is_recording.read() {
-                                    // Show "Warming up" immediately on release so the indicator
-                                    // only ever moves forward (warming → processing → done).
-                                    // stop_recording's status callback refines this: RunPod polls
-                                    // drive warming_up/processing, and OpenAI jumps straight to
-                                    // processing. Emitting "transcribing" here instead would make a
-                                    // cold RunPod worker flash purple→orange→purple (backwards).
-                                    indicator_warming_up(&app);
-
+                                if state.current_phase() == RecordingPhase::Recording {
                                     tauri::async_runtime::spawn(async move {
                                         let state = app.state::<AppState>();
+                                        let gen = state.current_generation();
                                         match stop_recording(state, app.clone()).await {
-                                            Ok(transcription) => {
-                                                if !transcription.is_empty() {
-                                                    hide_indicator(&app);
-                                                } else {
-                                                    hide_indicator(&app);
-                                                }
-                                            }
+                                            Ok(_) => {}
                                             Err(e) => {
                                                 log::error!("Failed to stop recording: {}", e);
                                                 let _ = app.emit("error", e);
-                                                hide_indicator(&app);
+                                                app.state::<AppState>().finish();
+                                                let gen = app.state::<AppState>().current_generation();
+                                                hide_indicator(&app, gen);
                                             }
                                         }
+                                        let _ = gen; // gen captured above for hide; stop_recording manages it
                                     });
                                 }
                             }
