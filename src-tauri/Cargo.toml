@@ -81,3 +81,10 @@ urlencoding = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Vendored, patched rdev (0.5.3). Upstream's macOS listen loop calls Text Input
+# Source APIs off the main thread to translate keycodes -> Event::name, which
+# SIGTRAPs on modern macOS. Our fork skips that lookup (we never read the name).
+# See vendor/rdev/src/macos/keyboard.rs.
+[patch.crates-io]
+rdev = { path = "vendor/rdev" }
