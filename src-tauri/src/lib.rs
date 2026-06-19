@@ -1052,6 +1052,13 @@ pub fn run() {
     let hotkey_mode = loaded_settings.hotkey_mode;
 
     tauri::Builder::default()
+        // Must be the first plugin: enforces a single running instance. When a
+        // second launch is attempted, this fires in the already-running instance
+        // (and the new process exits), so we just surface the existing window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info!("Second instance attempted — focusing existing window");
+            focus_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(shortcut_plugin)
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
