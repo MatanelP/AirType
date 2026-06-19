@@ -797,6 +797,18 @@ fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str, gen: u6
     });
 }
 
+/// Resize the main window live (used when the user edits the default size in
+/// Settings → Advanced). The configured size is also applied on next startup.
+#[tauri::command]
+fn set_main_window_size(app: AppHandle, width: u32, height: u32) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: width as f64,
+            height: height as f64,
+        }));
+    }
+}
+
 /// Briefly show the indicator so the user can preview the current position/size settings.
 #[tauri::command]
 fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
@@ -1080,6 +1092,7 @@ pub fn run() {
             check_input_monitoring_permission,
             needs_input_monitoring,
             open_input_monitoring_settings,
+            set_main_window_size,
             preview_indicator,
             check_for_update,
             download_and_install_update,
@@ -1296,11 +1309,15 @@ pub fn run() {
             // Ensure config directory exists
             let _ = std::fs::create_dir_all(SettingsStore::get_config_dir());
 
-            // Apply start_minimized setting
+            // Apply start_minimized setting + configured default window size
             let state = app.state::<AppState>();
             let settings = state.get_settings();
-            if settings.start_minimized {
-                if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: settings.window_width as f64,
+                    height: settings.window_height as f64,
+                }));
+                if settings.start_minimized {
                     let _ = window.hide();
                 }
             }

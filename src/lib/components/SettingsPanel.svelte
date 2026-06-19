@@ -234,6 +234,7 @@
 
   // ── Advanced / Indicator ─────────────────────────────────────────────────
   let advancedOpen = $state(false);
+  let advancedWindowOpen = $state(false);
 
   async function previewIndicator() {
     try {
@@ -241,6 +242,16 @@
     } catch (e) {
       console.error('preview_indicator failed:', e);
     }
+  }
+
+  // Persist the new size and apply it to the live window immediately.
+  /** @param {string} key @param {number} value */
+  function updateWindowSize(key, value) {
+    updateSetting(key, value);
+    invoke('set_main_window_size', {
+      width: localSettings.window_width ?? 420,
+      height: localSettings.window_height ?? 520,
+    }).catch((e) => console.error('set_main_window_size failed:', e));
   }
 
   // ── Updates ───────────────────────────────────────────────────────────────
@@ -665,6 +676,52 @@
                   Preview position ↗
                 </button>
                 <span class="preview-hint">Shows indicator for 2 s</span>
+              </div>
+            </div>
+          {/if}
+        </section>
+
+        <!-- Advanced: Window -->
+        <section class="settings-section">
+          <div
+            class="advanced-header"
+            role="button"
+            tabindex="0"
+            onclick={() => advancedWindowOpen = !advancedWindowOpen}
+            onkeydown={(e) => e.key === 'Enter' && (advancedWindowOpen = !advancedWindowOpen)}
+          >
+            <h3 style="margin:0">Advanced: Window</h3>
+            <span class="logs-chevron">{advancedWindowOpen ? '▲' : '▼'}</span>
+          </div>
+
+          {#if advancedWindowOpen}
+            <div class="advanced-body">
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Width</span>
+                  <span class="setting-desc">Main window default width (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="350" max="1200" step="10"
+                  value={localSettings.window_width ?? 420}
+                  oninput={(e) => updateWindowSize('window_width', parseInt(e.target.value) || 420)}
+                />
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-label">Height</span>
+                  <span class="setting-desc">Main window default height (px)</span>
+                </div>
+                <input
+                  type="number"
+                  class="num-input"
+                  min="400" max="1400" step="10"
+                  value={localSettings.window_height ?? 520}
+                  oninput={(e) => updateWindowSize('window_height', parseInt(e.target.value) || 520)}
+                />
               </div>
             </div>
           {/if}

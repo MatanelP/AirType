@@ -105,6 +105,13 @@ pub struct Settings {
     #[serde(default = "default_indicator_height")]
     pub indicator_height: u32,
 
+    /// Main window default width in logical pixels
+    #[serde(default = "default_window_width")]
+    pub window_width: u32,
+    /// Main window default height in logical pixels
+    #[serde(default = "default_window_height")]
+    pub window_height: u32,
+
     // ── Updates ───────────────────────────────────────────────────────────────
     /// Automatically check for updates on startup
     #[serde(default = "default_auto_check_updates")]
@@ -114,6 +121,8 @@ pub struct Settings {
 fn default_indicator_bottom_offset() -> f64 { 80.0 }
 fn default_indicator_width() -> u32 { 160 }
 fn default_indicator_height() -> u32 { 48 }
+fn default_window_width() -> u32 { 420 }
+fn default_window_height() -> u32 { 520 }
 fn default_auto_check_updates() -> bool { true }
 
 impl Default for Settings {
@@ -140,6 +149,9 @@ impl Default for Settings {
             indicator_x_offset: 0.0,
             indicator_width: default_indicator_width(),
             indicator_height: default_indicator_height(),
+
+            window_width: default_window_width(),
+            window_height: default_window_height(),
 
             auto_check_updates: default_auto_check_updates(),
         }
