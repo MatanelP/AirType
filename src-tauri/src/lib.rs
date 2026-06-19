@@ -231,7 +231,16 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     state.begin_processing();
     let gen = state.current_generation();
     let _ = app.emit("recording-stopped", ());
-    emit_phase(&app, "processing", &language, gen);
+
+    // RunPod can cold-start, so show orange "Warming up" first; the status
+    // callback below refines it (IN_QUEUE -> warming, IN_PROGRESS -> processing).
+    // OpenAI has no cold start, so go straight to purple "Processing".
+    let uses_runpod = language == "he"
+        || matches!(
+            settings.english_endpoint_type,
+            EnglishEndpointType::SharedRunPod | EnglishEndpointType::CustomRunPod
+        );
+    emit_phase(&app, if uses_runpod { "warming" } else { "processing" }, &language, gen);
 
     if samples.is_empty() {
         log::warn!("No audio samples captured");
@@ -246,7 +255,7 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     let lang_cb = language.clone();
     let status_cb = move |status: &str| {
         let vphase = match status {
-            "warming_up" => "processing",
+            "warming_up" => "warming",
             "processing"  => "processing",
             _ => return,
         };
@@ -285,7 +294,6 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                 transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
             }
             EnglishEndpointType::OpenAI => {
-                emit_phase(&app, "processing", &language, gen);
                 let openai_key = settings.english_openai_api_key
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "OpenAI API key not set. Go to Settings to add it.".to_string())?;

@@ -98,6 +98,11 @@
           isTranscribing = false;
           indicatorState = 'recording';
           startDurationTimer();
+        } else if (phase === 'warming') {
+          isRecording = false;
+          isTranscribing = true;
+          indicatorState = 'warming_up';
+          stopDurationTimer();
         } else if (phase === 'processing') {
           isRecording = false;
           isTranscribing = true;

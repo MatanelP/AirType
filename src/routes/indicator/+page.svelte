@@ -26,19 +26,22 @@
 
   let gradient = $derived(
     state === 'recording'   ? 'linear-gradient(135deg, #f87171 0%, #ef4444 100%)' :
-    state === 'processing'  ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
+    state === 'warming'     ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
+    state === 'processing'  ? 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%)' :
     state === 'done'        ? 'linear-gradient(135deg, #4ade80 0%, #22c55e 100%)' :
     'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)'
   );
 
   let icon = $derived(
     state === 'recording'  ? '●' :
+    state === 'warming'    ? '◌' :
     state === 'processing' ? '◐' :
     state === 'done'       ? '✓' : '●'
   );
 
   let label = $derived(
     state === 'recording'  ? (language === 'he' ? 'מקליט'  : 'Recording')   :
+    state === 'warming'    ? (language === 'he' ? 'מתחמם'  : 'Warming up')  :
     state === 'processing' ? (language === 'he' ? 'מעבד'   : 'Processing')  :
     state === 'done'       ? (language === 'he' ? 'בוצע'   : 'Done')        :
     'Recording'
@@ -47,7 +50,7 @@
 
 <div class="wrap">
   <div class="indicator" style="background: {gradient};">
-    <span class="icon" class:pulse={state === 'recording'} class:spin={state === 'processing'}>
+    <span class="icon" class:pulse={state === 'recording' || state === 'warming'} class:spin={state === 'processing'}>
       {icon}
     </span>
     <span class="label">{label}</span>
