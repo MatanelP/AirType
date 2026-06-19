@@ -880,6 +880,19 @@ fn hide_indicator<R: tauri::Runtime>(app: &AppHandle<R>, gen: u64) {
     });
 }
 
+/// Bring the main window to the foreground. On macOS, `set_focus` alone does not
+/// reliably raise the window when the app is in the background, so we also
+/// re-activate the application and unminimize the window.
+fn focus_main_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let _ = app.show();
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 // ============================================================================
 // App Entry Point
 // ============================================================================
@@ -993,10 +1006,7 @@ pub fn run() {
                         app.exit(0);
                     }
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        focus_main_window(app);
                     }
                     _ => {}
                 })
@@ -1007,11 +1017,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        focus_main_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -1177,10 +1183,7 @@ pub fn run() {
                             }
                             HotkeyEvent::SettingsOpen => {
                                 log::info!("Hotkey: Open settings");
-                                if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
+                                focus_main_window(&app);
                                 let _ = app.emit("open-settings", ());
                             }
                             _ => {}
@@ -1232,16 +1235,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // On macOS, clicking the Dock icon when all windows are hidden fires
-            // Reopen. Show the main window so the user isn't left with nothing.
+            // On macOS, clicking the Dock icon fires Reopen. Bring the main
+            // window to the front whether or not it was already visible —
+            // otherwise a window hidden behind other apps stays buried.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
-                if !has_visible_windows {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
+            if let tauri::RunEvent::Reopen { .. } = event {
+                focus_main_window(app_handle);
             }
             #[cfg(not(target_os = "macos"))]
             { let _ = (app_handle, event); }
