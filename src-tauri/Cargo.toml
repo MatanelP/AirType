@@ -1,6 +1,6 @@
 [package]
 name = "airtype"
-version = "1.3.2"
+version = "1.3.3"
 description = "AirType - Voice to Text Desktop App"
 authors = ["MatanelP"]
 edition = "2021"
