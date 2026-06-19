@@ -1045,6 +1045,18 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
+        .on_window_event(|window, event| {
+            // Closing the main window with the red X (or Cmd+W) should hide it,
+            // not destroy it — otherwise the window can't be re-shown from the
+            // dock/tray and the user has to quit to get it back. The app keeps
+            // running in the tray; real quit goes through the tray "Quit" item.
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
