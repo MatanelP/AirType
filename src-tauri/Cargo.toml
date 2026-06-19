@@ -71,6 +71,9 @@ keyring = { version = "3", features = ["apple-native"] }
 # tracking with raw keycodes is unreliable and sometimes types a literal "v").
 # Pinned to match the version enigo already pulls in.
 core-graphics = "0.23"
+# Objective-C runtime: used to call [NSApp activateIgnoringOtherApps:] so the
+# main window reliably comes to the foreground from tray/dock activation.
+objc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Secure secret storage on Windows

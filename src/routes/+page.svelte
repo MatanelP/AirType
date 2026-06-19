@@ -30,6 +30,7 @@
   let recordingLanguage = $state('en');
   let indicatorState = $state('idle'); // idle, recording, transcribing, done
   let needsAccessibility = $state(false);
+  let needsInputMonitoring = $state(false);
 
   // Self-update
   /** @type {{version: string, current_version: string, notes: string | null, date: string | null} | null} */
@@ -154,6 +155,16 @@
         needsAccessibility = true;
       }));
 
+      // Input Monitoring permission check (macOS bare-modifier hotkey requirement).
+      // Only flagged when a modifier-only hotkey is actually in use.
+      try {
+        needsInputMonitoring = /** @type {boolean} */ (await invoke('needs_input_monitoring'));
+      } catch (_) {}
+
+      unlisteners.push(await listen('input-monitoring-permission-needed', () => {
+        needsInputMonitoring = true;
+      }));
+
       // Self-update: backend checks on startup and emits when an update exists.
       unlisteners.push(await listen('update-available', (event) => {
         availableUpdate = /** @type {any} */ (event.payload);
@@ -244,6 +255,11 @@
   /** @param {Record<string, unknown>} newSettings */
   function handleSettingsSave(newSettings) {
     settings = { ...settings, ...newSettings };
+    // Whether Input Monitoring is needed depends on the chosen hotkeys, so
+    // re-evaluate after a settings change (e.g. user picked a bare modifier).
+    invoke('needs_input_monitoring')
+      .then((v) => { needsInputMonitoring = /** @type {boolean} */ (v); })
+      .catch(() => {});
   }
   
   function dismissError() {
@@ -258,6 +274,18 @@
       try {
         const trusted = /** @type {boolean} */ (await invoke('check_accessibility_permission'));
         if (trusted) { needsAccessibility = false; break; }
+      } catch (_) {}
+    }
+  }
+
+  async function openInputMonitoringSettings() {
+    await invoke('open_input_monitoring_settings');
+    // Poll for 10 s so the banner clears as soon as the user grants access
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const granted = /** @type {boolean} */ (await invoke('check_input_monitoring_permission'));
+        if (granted) { needsInputMonitoring = false; break; }
       } catch (_) {}
     }
   }
@@ -380,7 +408,23 @@
       </button>
     </div>
   {/if}
-  
+
+  <!-- Input Monitoring Permission Banner -->
+  {#if needsInputMonitoring}
+    <div class="accessibility-banner">
+      <span>
+        <svg class="banner-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <strong>Input Monitoring access needed</strong> — modifier-key hotkeys won't work without it.
+      </span>
+      <button class="accessibility-btn" onclick={openInputMonitoringSettings}>
+        Open System Settings
+      </button>
+    </div>
+  {/if}
+
   <!-- Main Content -->
   <section class="content">
     <!-- Status Indicator -->

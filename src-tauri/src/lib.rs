@@ -526,6 +526,67 @@ fn open_accessibility_settings() {
     }
 }
 
+/// Whether this process has Input Monitoring access (needed for the low-level
+/// keyboard listener that powers bare-modifier hotkeys). macOS-only.
+#[cfg(target_os = "macos")]
+fn input_monitoring_granted() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightListenEventAccess() -> bool;
+    }
+    unsafe { CGPreflightListenEventAccess() }
+}
+
+/// Check whether this process has Input Monitoring access (macOS only).
+/// On non-macOS platforms this always returns true.
+#[tauri::command]
+fn check_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        input_monitoring_granted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// Returns true only when the user actually relies on a bare-modifier hotkey
+/// (which uses the low-level listener) AND Input Monitoring is not yet granted.
+/// This keeps the banner from nagging users who only use combo hotkeys.
+#[tauri::command]
+fn needs_input_monitoring(state: State<'_, AppState>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let s = state.get_settings();
+        let uses_modifier = is_modifier_only_hotkey(&s.hotkey_english)
+            || is_modifier_only_hotkey(&s.hotkey_hebrew);
+        uses_modifier && !input_monitoring_granted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        false
+    }
+}
+
+/// Open System Settings → Privacy & Security → Input Monitoring. Also issues a
+/// request so the app is registered in the list (and prompted on first use).
+/// macOS-only; no-op on other platforms.
+#[tauri::command]
+fn open_input_monitoring_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGRequestListenEventAccess() -> bool;
+        }
+        // Registers AirType in the Input Monitoring list / triggers the prompt.
+        unsafe { CGRequestListenEventAccess() };
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+            .spawn();
+    }
+}
+
 /// Validate OpenAI API key by making a lightweight request
 #[tauri::command]
 async fn validate_openai_key(api_key: String) -> Result<bool, String> {
@@ -892,13 +953,27 @@ fn hide_indicator<R: tauri::Runtime>(app: &AppHandle<R>, gen: u64) {
 /// reliably raise the window when the app is in the background, so we also
 /// re-activate the application and unminimize the window.
 fn focus_main_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("main") {
+    let app = app.clone();
+    // Run on the main thread: tray clicks and the SettingsOpen hotkey can fire
+    // off the main thread, and the AppKit activation below must be main-thread.
+    let _ = app.clone().run_on_main_thread(move || {
+        // On macOS, window.set_focus() alone does not reliably raise a background
+        // app (especially from a status-bar click). Explicitly activate the
+        // application first so the window actually comes to the foreground.
         #[cfg(target_os = "macos")]
-        let _ = app.show();
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+        unsafe {
+            use objc::runtime::{Object, YES};
+            use objc::{class, msg_send, sel, sel_impl};
+            let _ = app.show();
+            let ns_app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            let _: () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    });
 }
 
 // ============================================================================
@@ -990,6 +1065,9 @@ pub fn run() {
             update_hotkeys,
             check_accessibility_permission,
             open_accessibility_settings,
+            check_input_monitoring_permission,
+            needs_input_monitoring,
+            open_input_monitoring_settings,
             preview_indicator,
             check_for_update,
             download_and_install_update,
@@ -1235,6 +1313,15 @@ pub fn run() {
                     let _ = app.emit("accessibility-permission-needed", ());
                 } else {
                     log::info!("Accessibility permission: granted");
+                }
+
+                // Input Monitoring is only required for bare-modifier hotkeys.
+                let s = app.state::<AppState>().get_settings();
+                let uses_modifier = is_modifier_only_hotkey(&s.hotkey_english)
+                    || is_modifier_only_hotkey(&s.hotkey_hebrew);
+                if uses_modifier && !input_monitoring_granted() {
+                    log::warn!("Input Monitoring not granted — modifier-key hotkeys will not work. Grant access in System Settings → Privacy & Security → Input Monitoring.");
+                    let _ = app.emit("input-monitoring-permission-needed", ());
                 }
             }
 

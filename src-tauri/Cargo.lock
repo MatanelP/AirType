@@ -31,6 +31,7 @@ dependencies = [
  "env_logger",
  "keyring",
  "log",
+ "objc",
  "parking_lot",
  "rdev",
  "reqwest 0.12.28",
