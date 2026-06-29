@@ -57,14 +57,21 @@ impl Default for CaptureConfig {
     }
 }
 
+/// The currently-resolved input device together with its native format.
+/// Re-resolved on every recording so capture always binds to whatever input
+/// device is active right now (handles unplug/replug and default-device changes).
+struct DeviceHandle {
+    device: Device,
+    sample_rate: u32,
+    channels: u16,
+}
+
 /// Main audio capture struct - manages recording from microphone
 pub struct AudioCapture {
-    device: Device,
+    handle: Mutex<DeviceHandle>,
     buffer: AudioBuffer,
     stream: Mutex<Option<Stream>>,
     is_recording: Arc<AtomicBool>,
-    device_sample_rate: u32,
-    device_channels: u16,
     /// Optional sender for streaming audio chunks to an external consumer (e.g. OpenAI)
     stream_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>>,
 }
@@ -81,6 +88,21 @@ impl AudioCapture {
 
     /// Create a new AudioCapture with custom configuration
     pub fn with_config(config: CaptureConfig) -> Result<Self, AudioError> {
+        let handle = Self::acquire_default_device()?;
+
+        Ok(Self {
+            handle: Mutex::new(handle),
+            buffer: AudioBuffer::with_chunk_size(config.chunk_size),
+            stream: Mutex::new(None),
+            is_recording: Arc::new(AtomicBool::new(false)),
+            stream_tx: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Resolve the OS's *current* default input device and its native format.
+    /// Called on every `start_recording` so capture always follows whichever
+    /// device is active now, recovering automatically from unplug/replug.
+    fn acquire_default_device() -> Result<DeviceHandle, AudioError> {
         let host = cpal::default_host();
 
         let device = host
@@ -91,28 +113,29 @@ impl AudioCapture {
             .default_input_config()
             .map_err(|e| AudioError::ConfigError(e.to_string()))?;
 
-        let device_sample_rate = supported_config.sample_rate().0;
-        let device_channels = supported_config.channels();
+        let sample_rate = supported_config.sample_rate().0;
+        let channels = supported_config.channels();
 
         log::info!(
             "Audio device: {} ({}Hz, {} channels)",
             device.name().unwrap_or_else(|_| "Unknown".to_string()),
-            device_sample_rate,
-            device_channels
+            sample_rate,
+            channels
         );
 
-        Ok(Self {
+        Ok(DeviceHandle {
             device,
-            buffer: AudioBuffer::with_chunk_size(config.chunk_size),
-            stream: Mutex::new(None),
-            is_recording: Arc::new(AtomicBool::new(false)),
-            device_sample_rate,
-            device_channels,
-            stream_tx: Arc::new(Mutex::new(None)),
+            sample_rate,
+            channels,
         })
     }
 
-    /// Start recording audio from the microphone
+    /// Start recording audio from the microphone.
+    ///
+    /// Re-resolves the current default input device first, so recording always
+    /// binds to whatever device is active now. If the device disappears between
+    /// being resolved and the stream being built (e.g. unplugged mid-call), the
+    /// device is re-acquired and the stream build is retried once.
     pub fn start_recording(&self) -> Result<(), AudioError> {
         if self.is_recording.load(Ordering::SeqCst) {
             return Err(AudioError::AlreadyRecording);
@@ -121,20 +144,60 @@ impl AudioCapture {
         // Clear any previous samples
         self.buffer.clear();
 
+        const MAX_ATTEMPTS: usize = 2;
+        let mut last_err: Option<AudioError> = None;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            // Bind to the *current* default input device on every attempt.
+            let fresh = match Self::acquire_default_device() {
+                Ok(handle) => handle,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+            *self.handle.lock() = fresh;
+
+            match self.build_and_start_stream() {
+                Ok(stream) => {
+                    self.is_recording.store(true, Ordering::SeqCst);
+                    *self.stream.lock() = Some(stream);
+                    log::info!("Recording started");
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::warn!(
+                        "start_recording attempt {}/{} failed: {}",
+                        attempt,
+                        MAX_ATTEMPTS,
+                        e
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or(AudioError::NoInputDevice))
+    }
+
+    /// Build and start the input stream from the currently-resolved device.
+    fn build_and_start_stream(&self) -> Result<Stream, AudioError> {
+        let handle = self.handle.lock();
+
         let buffer = self.buffer.clone();
         let is_recording = self.is_recording.clone();
         let stream_tx = self.stream_tx.clone();
         let resample_state = Arc::new(Mutex::new(ResampleState::new()));
-        let source_rate = self.device_sample_rate;
-        let channels = self.device_channels as usize;
+        let source_rate = handle.sample_rate;
+        let channels = handle.channels as usize;
         let resample_ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
         let config = StreamConfig {
-            channels: self.device_channels,
-            sample_rate: SampleRate(self.device_sample_rate),
+            channels: handle.channels,
+            sample_rate: SampleRate(handle.sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let stream = self
+        let stream = handle
             .device
             .build_input_stream(
                 &config,
@@ -175,11 +238,7 @@ impl AudioCapture {
             .play()
             .map_err(|e| AudioError::StreamStartError(e.to_string()))?;
 
-        self.is_recording.store(true, Ordering::SeqCst);
-        *self.stream.lock() = Some(stream);
-
-        log::info!("Recording started");
-        Ok(())
+        Ok(stream)
     }
 
     /// Stop recording and return all captured samples
@@ -283,12 +342,16 @@ impl AudioCapture {
 
     /// Get the device name
     pub fn device_name(&self) -> String {
-        self.device.name().unwrap_or_else(|_| "Unknown".to_string())
+        self.handle
+            .lock()
+            .device
+            .name()
+            .unwrap_or_else(|_| "Unknown".to_string())
     }
 
     /// Get the native sample rate of the audio device
     pub fn device_sample_rate(&self) -> u32 {
-        self.device_sample_rate
+        self.handle.lock().sample_rate
     }
 }
 

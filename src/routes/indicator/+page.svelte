@@ -18,6 +18,12 @@
       state = phase; // idle | recording | processing | done
     });
 
+    // Critical, flow-blocking errors switch the indicator to a red error state.
+    // The backend makes the window visible and auto-hides it after a few seconds.
+    listen('error', () => {
+      state = 'error';
+    });
+
     // indicator-hide is still emitted by hide_indicator to force-hide the window.
     listen('indicator-hide', () => {
       state = 'idle';
@@ -29,6 +35,7 @@
     state === 'warming'     ? 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)' :
     state === 'processing'  ? 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%)' :
     state === 'done'        ? 'linear-gradient(135deg, #4ade80 0%, #22c55e 100%)' :
+    state === 'error'       ? 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)' :
     'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)'
   );
 
@@ -36,7 +43,8 @@
     state === 'recording'  ? '●' :
     state === 'warming'    ? '◌' :
     state === 'processing' ? '◐' :
-    state === 'done'       ? '✓' : '●'
+    state === 'done'       ? '✓' :
+    state === 'error'      ? '✕' : '●'
   );
 
   let label = $derived(
@@ -44,6 +52,7 @@
     state === 'warming'    ? (language === 'he' ? 'מתחמם'  : 'Warming up')  :
     state === 'processing' ? (language === 'he' ? 'מעבד'   : 'Processing')  :
     state === 'done'       ? (language === 'he' ? 'בוצע'   : 'Done')        :
+    state === 'error'      ? (language === 'he' ? 'שגיאה'  : 'Error')       :
     'Recording'
   );
 </script>
