@@ -5,6 +5,7 @@
 
   let state = $state('idle');
   let language = $state('en');
+  let errorSummary = $state('Error');
   let curGen = -1;
 
   onMount(() => {
@@ -20,7 +21,11 @@
 
     // Critical, flow-blocking errors switch the indicator to a red error state.
     // The backend makes the window visible and auto-hides it after a few seconds.
-    listen('error', () => {
+    // The payload's `summary` is a short, human-readable reason (e.g. "No
+    // microphone") shown in the pill; the full detail goes to the main-UI toast.
+    listen('error', (e) => {
+      const p = e.payload;
+      errorSummary = (p && typeof p === 'object' && p.summary) ? p.summary : 'Error';
       state = 'error';
     });
 
@@ -52,7 +57,7 @@
     state === 'warming'    ? (language === 'he' ? 'מתחמם'  : 'Warming up')  :
     state === 'processing' ? (language === 'he' ? 'מעבד'   : 'Processing')  :
     state === 'done'       ? (language === 'he' ? 'בוצע'   : 'Done')        :
-    state === 'error'      ? (language === 'he' ? 'שגיאה'  : 'Error')       :
+    state === 'error'      ? errorSummary                                   :
     'Recording'
   );
 </script>

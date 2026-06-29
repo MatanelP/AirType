@@ -139,7 +139,10 @@
       }));
 
       unlisteners.push(await listen('error', (event) => {
-        error = /** @type {string} */ (event.payload);
+        // Backend critical errors send { summary, message }; older/string
+        // payloads are still handled for safety.
+        const p = /** @type {any} */ (event.payload);
+        error = (p && typeof p === 'object') ? (p.message ?? p.summary) : p;
         isRecording = false;
         isTranscribing = false;
         stopDurationTimer();
