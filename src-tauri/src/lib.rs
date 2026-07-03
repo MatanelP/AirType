@@ -167,6 +167,11 @@ fn emit_phase<R: tauri::Runtime>(
     );
 }
 
+/// RMS amplitude below which captured audio is treated as effectively silent.
+/// Used only to confirm a Hebrew filler transcript is a hallucination before
+/// discarding it; normal speech sits well above this (~0.1+).
+const FILLER_SILENCE_RMS: f32 = 0.02;
+
 /// Every distinct short error summary the indicator can show. Single source of
 /// truth for the dev-only `preview_indicator_errors` command. Keep in sync with
 /// the literals returned by `summarize_error` and passed at the mic call sites.
@@ -388,14 +393,29 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
 
     log::info!("{} transcription: {}", language, transcription);
 
-    // Discard Hebrew "thank you"-style hallucinations the model emits on silence
-    // or unclear audio — behave as if nothing was transcribed (no injection, no
-    // history, no last-transcription overwrite), mirroring the empty-audio path.
+    // Discard Hebrew "thank you"-style hallucinations the model emits on silence.
+    // A real "תודה" and a hallucinated one are identical text, so we only drop it
+    // when the captured audio is also near-silent (low RMS) — that way a
+    // genuinely-spoken short phrase over real speech energy is kept. Behaves as if
+    // nothing was transcribed (no injection/history/overwrite), like empty audio.
     if language == "he" && is_hebrew_filler(&transcription) {
-        log::info!("Discarded Hebrew filler-only transcription: {:?}", transcription);
-        state.finish();
-        hide_indicator(&app, gen);
-        return Ok(String::new());
+        let energy = audio::rms_energy(&samples);
+        if energy < FILLER_SILENCE_RMS {
+            log::info!(
+                "Discarded Hebrew filler-only transcription {:?} (rms={:.4} < {:.4})",
+                transcription,
+                energy,
+                FILLER_SILENCE_RMS
+            );
+            state.finish();
+            hide_indicator(&app, gen);
+            return Ok(String::new());
+        }
+        log::info!(
+            "Kept filler-looking transcription {:?}: audio not silent (rms={:.4})",
+            transcription,
+            energy
+        );
     }
 
     *state.last_transcription.write() = transcription.clone();
