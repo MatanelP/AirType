@@ -244,6 +244,16 @@
     }
   }
 
+  // Dev-only: shown only in non-release builds (import.meta.env.DEV).
+  const isDev = import.meta.env.DEV;
+  async function previewIndicatorErrors() {
+    try {
+      await invoke('preview_indicator_errors');
+    } catch (e) {
+      console.error('preview_indicator_errors failed:', e);
+    }
+  }
+
   // Persist the new size and apply it to the live window immediately.
   /** @param {string} key @param {number} value */
   function updateWindowSize(key, value) {
@@ -677,6 +687,15 @@
                 </button>
                 <span class="preview-hint">Shows indicator for 2 s</span>
               </div>
+
+              {#if isDev}
+                <div class="preview-row">
+                  <button class="preview-btn" onclick={previewIndicatorErrors}>
+                    Preview error states ⚠
+                  </button>
+                  <span class="preview-hint">Dev only — cycles all error summaries</span>
+                </div>
+              {/if}
             </div>
           {/if}
         </section>

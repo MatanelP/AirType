@@ -167,6 +167,88 @@ fn emit_phase<R: tauri::Runtime>(
     );
 }
 
+/// Every distinct short error summary the indicator can show. Single source of
+/// truth for the dev-only `preview_indicator_errors` command. Keep in sync with
+/// the literals returned by `summarize_error` and passed at the mic call sites.
+const ALL_ERROR_SUMMARIES: &[&str] = &[
+    "No microphone",
+    "Microphone error",
+    "Setup needed",
+    "Couldn't insert text",
+    "Transcription failed",
+    "Something went wrong",
+];
+
+/// Map a full error detail string to a short, human-readable summary for the
+/// floating indicator. Used at the generic error sites (`start_recording` /
+/// `stop_recording`) whose `?`-propagated errors span several families:
+/// missing credentials, microphone, transcription, and text injection.
+fn summarize_error(detail: &str) -> &'static str {
+    let d = detail.to_lowercase();
+    if d.contains("not set") {
+        "Setup needed"
+    } else if d.contains("inject") {
+        "Couldn't insert text"
+    } else if d.contains("microphone")
+        || d.contains("audio capture")
+        || d.contains("audio stream")
+        || d.contains("input device")
+        || d.contains("stop recording")
+    {
+        "Microphone error"
+    } else if d.contains("openai")
+        || d.contains("runpod")
+        || d.contains("transcription")
+        || d.contains("timed out")
+    {
+        "Transcription failed"
+    } else {
+        "Something went wrong"
+    }
+}
+
+/// Surface a **critical, flow-blocking** error (no mic, transcription failure,
+/// injection failure, missing credentials, …) to the user in BOTH the main UI
+/// (toast) and the floating indicator (red error state). Minor/recoverable
+/// conditions should NOT go through here — they stay as plain log warnings.
+///
+/// `summary` is a short, human-readable reason shown in the small floating
+/// indicator (e.g. "No microphone"); `detail` is the full message shown in the
+/// main-UI toast and the logs (e.g. the underlying device/API error).
+fn surface_critical_error<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    summary: impl Into<String>,
+    detail: impl Into<String>,
+) {
+    let summary = summary.into();
+    let detail = detail.into();
+    log::error!("{}: {}", summary, detail);
+
+    // Abort any in-flight session and bump the generation so a pending
+    // hide_indicator from the aborted flow can't clobber the error display.
+    let state = app.state::<AppState>();
+    state.finish();
+    let gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // Both the main-UI toast and the indicator window listen for "error".
+    // The structured payload lets each surface show the right amount of text:
+    // the indicator uses `summary`, the toast uses `message` (full detail).
+    let _ = app.emit(
+        "error",
+        serde_json::json!({ "summary": summary, "message": detail }),
+    );
+
+    // Make the indicator window visible; it switches itself to the error state.
+    position_and_show_indicator(app);
+
+    // Auto-hide after a few seconds, unless a new session started meanwhile.
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        hide_indicator(&app_clone, gen);
+    });
+}
+
 // ============================================================================
 // Tauri Commands
 // ============================================================================
@@ -731,7 +813,7 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
     let capture = match state.get_audio_capture() {
         Ok(c) => c,
         Err(e) => {
-            log::error!("prewarm_capture: no audio device: {}", e);
+            surface_critical_error(app, "No microphone", format!("No microphone available: {}", e));
             return;
         }
     };
@@ -748,7 +830,7 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
             log::info!("Mic capture pre-warmed (language={})", language);
         }
         Err(e) => {
-            log::error!("prewarm_capture: failed to start mic: {}", e);
+            surface_critical_error(app, "Microphone error", format!("Couldn't start microphone: {}", e));
         }
     }
 }
@@ -758,6 +840,15 @@ fn prewarm_capture<R: tauri::Runtime>(app: &AppHandle<R>, language: &str) {
 fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str, gen: u64) {
     log::info!("Showing indicator for language: {}", language);
 
+    // Emit unified phase event so both windows update instantly.
+    emit_phase(app, "recording", language, gen);
+
+    position_and_show_indicator(app);
+}
+
+/// Position the floating indicator window per current settings and show it.
+/// Does not emit any phase — the caller decides what state the indicator shows.
+fn position_and_show_indicator<R: tauri::Runtime>(app: &AppHandle<R>) {
     let settings = app.state::<AppState>().get_settings();
     let win_w = settings.indicator_width as f64;
     let win_h = settings.indicator_height as f64;
@@ -766,9 +857,6 @@ fn show_indicator<R: tauri::Runtime>(app: &AppHandle<R>, language: &str, gen: u6
     let align = settings.indicator_align;
 
     let app_clone = app.clone();
-
-    // Emit unified phase event so both windows update instantly.
-    emit_phase(app, "recording", language, gen);
 
     // Run window operations on main thread to avoid X11 threading issues
     let _ = app.run_on_main_thread(move || {
@@ -819,6 +907,33 @@ fn preview_indicator(app: AppHandle, state: State<'_, AppState>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         hide_indicator(&app_clone, gen);
+    });
+}
+
+/// Dev-only: cycle the floating indicator through every possible error summary
+/// (see [`ALL_ERROR_SUMMARIES`]) so the error UI can be eyeballed without
+/// triggering real failures. No-op in release builds; the Settings button that
+/// invokes it is also only shown in dev builds.
+#[tauri::command]
+fn preview_indicator_errors(app: AppHandle, state: State<'_, AppState>) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let gen = state.current_generation();
+    tauri::async_runtime::spawn(async move {
+        for summary in ALL_ERROR_SUMMARIES {
+            let _ = app.emit(
+                "error",
+                serde_json::json!({
+                    "summary": summary,
+                    "message": format!("[preview] {}", summary),
+                }),
+            );
+            // Same path the real errors take, so the indicator renders identically.
+            position_and_show_indicator(&app);
+            tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
+        }
+        hide_indicator(&app, gen);
     });
 }
 
@@ -1101,6 +1216,7 @@ pub fn run() {
             open_input_monitoring_settings,
             set_main_window_size,
             preview_indicator,
+            preview_indicator_errors,
             check_for_update,
             download_and_install_update,
         ])
@@ -1247,8 +1363,7 @@ pub fn run() {
                                             if !capture.is_recording() {
                                                 capture.clear_stream_sender();
                                                 if let Err(e) = capture.start_recording() {
-                                                    log::error!("Failed to start mic capture: {}", e);
-                                                    let _ = app.emit("error", e.to_string());
+                                                    surface_critical_error(&app, "Microphone error", format!("Couldn't start microphone: {}", e));
                                                     return;
                                                 }
                                             }
@@ -1257,8 +1372,7 @@ pub fn run() {
                                             emit_phase(&app, "recording", &language, gen);
                                         }
                                         Err(e) => {
-                                            log::error!("No audio capture: {}", e);
-                                            let _ = app.emit("error", e);
+                                            surface_critical_error(&app, "No microphone", format!("No microphone available: {}", e));
                                             return;
                                         }
                                     }
@@ -1271,10 +1385,7 @@ pub fn run() {
                                 tauri::async_runtime::spawn(async move {
                                     let state = app.state::<AppState>();
                                     if let Err(e) = start_recording(state, app.clone(), None).await {
-                                        log::error!("Failed to start recording: {}", e);
-                                        let _ = app.emit("error", e);
-                                        let gen = app.state::<AppState>().current_generation();
-                                        hide_indicator(&app, gen);
+                                        surface_critical_error(&app, summarize_error(&e), e);
                                     }
                                 });
                             }
@@ -1284,18 +1395,9 @@ pub fn run() {
                                 if state.current_phase() == RecordingPhase::Recording {
                                     tauri::async_runtime::spawn(async move {
                                         let state = app.state::<AppState>();
-                                        let gen = state.current_generation();
-                                        match stop_recording(state, app.clone()).await {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                log::error!("Failed to stop recording: {}", e);
-                                                let _ = app.emit("error", e);
-                                                app.state::<AppState>().finish();
-                                                let gen = app.state::<AppState>().current_generation();
-                                                hide_indicator(&app, gen);
-                                            }
+                                        if let Err(e) = stop_recording(state, app.clone()).await {
+                                            surface_critical_error(&app, summarize_error(&e), e);
                                         }
-                                        let _ = gen; // gen captured above for hide; stop_recording manages it
                                     });
                                 }
                             }
