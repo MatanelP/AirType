@@ -29,8 +29,8 @@ use hotkeys::{
 use injection::TextInjector;
 use settings::{EnglishEndpointType, IndicatorAlign, Settings, SettingsStore};
 use transcription::{
-    encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
-    transcribe_english, transcribe_hebrew_wav, validate_runpod,
+    encode_wav, english_test_wav, hebrew_test_wav, is_hebrew_filler, transcribe_audio,
+    transcribe_audio_wav, transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
 use tauri_plugin_updater::UpdaterExt;
 
@@ -387,6 +387,17 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     };
 
     log::info!("{} transcription: {}", language, transcription);
+
+    // Discard Hebrew "thank you"-style hallucinations the model emits on silence
+    // or unclear audio — behave as if nothing was transcribed (no injection, no
+    // history, no last-transcription overwrite), mirroring the empty-audio path.
+    if language == "he" && is_hebrew_filler(&transcription) {
+        log::info!("Discarded Hebrew filler-only transcription: {:?}", transcription);
+        state.finish();
+        hide_indicator(&app, gen);
+        return Ok(String::new());
+    }
+
     *state.last_transcription.write() = transcription.clone();
     let _ = app.emit("transcription-complete", &transcription);
 
