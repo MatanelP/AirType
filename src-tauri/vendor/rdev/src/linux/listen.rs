@@ -1,6 +1,6 @@
 extern crate libc;
 extern crate x11;
-use crate::linux::common::{convert, FALSE, KEYBOARD};
+use crate::linux::common::{convert, FALSE};
 use crate::linux::keyboard::Keyboard;
 use crate::rdev::{Event, ListenError};
 use std::convert::TryInto;
@@ -10,18 +10,23 @@ use std::ptr::null;
 use x11::xlib;
 use x11::xrecord;
 
-static mut RECORD_ALL_CLIENTS: c_ulong = xrecord::XRecordAllClients;
-static mut GLOBAL_CALLBACK: Option<Box<dyn FnMut(Event)>> = None;
+struct ListenerState {
+    keyboard: Option<Keyboard>,
+    callback: Box<dyn FnMut(Event)>,
+}
 
 pub fn listen<T>(callback: T) -> Result<(), ListenError>
 where
     T: FnMut(Event) + 'static,
 {
     let keyboard = Keyboard::new().ok_or(ListenError::KeyboardError)?;
+    let mut listener = ListenerState {
+        keyboard: Some(keyboard),
+        callback: Box::new(callback),
+    };
+    let mut record_all_clients: c_ulong = xrecord::XRecordAllClients;
 
     unsafe {
-        KEYBOARD = Some(keyboard);
-        GLOBAL_CALLBACK = Some(Box::new(callback));
         // Open displays
         let dpy_control = xlib::XOpenDisplay(null());
         if dpy_control.is_null() {
@@ -43,7 +48,7 @@ where
         let context = xrecord::XRecordCreateContext(
             dpy_control,
             0,
-            &mut RECORD_ALL_CLIENTS,
+            &mut record_all_clients,
             1,
             &mut &mut record_range as *mut &mut xrecord::XRecordRange
                 as *mut *mut xrecord::XRecordRange,
@@ -56,8 +61,14 @@ where
 
         xlib::XSync(dpy_control, FALSE);
         // Run
-        let result =
-            xrecord::XRecordEnableContext(dpy_control, context, Some(record_callback), &mut 0);
+        // This synchronous call dispatches callbacks on this thread and returns
+        // only after recording stops, so listener outlives every callback.
+        let result = xrecord::XRecordEnableContext(
+            dpy_control,
+            context,
+            Some(record_callback),
+            &mut listener as *mut ListenerState as *mut c_char,
+        );
         if result == 0 {
             return Err(ListenError::RecordContextEnablingError);
         }
@@ -86,7 +97,7 @@ struct XRecordDatum {
 }
 
 unsafe extern "C" fn record_callback(
-    _null: *mut c_char,
+    closure: *mut c_char,
     raw_data: *mut xrecord::XRecordInterceptData,
 ) {
     let data = raw_data.as_ref().unwrap();
@@ -105,10 +116,10 @@ unsafe extern "C" fn record_callback(
     let x = xdatum.root_x as f64;
     let y = xdatum.root_y as f64;
 
-    if let Some(event) = convert(&mut KEYBOARD, code, type_, x, y) {
-        if let Some(callback) = &mut GLOBAL_CALLBACK {
-            callback(event);
-        }
+    // XRecord returns the listener pointer supplied to XRecordEnableContext.
+    let listener = &mut *(closure as *mut ListenerState);
+    if let Some(event) = convert(&mut listener.keyboard, code, type_, x, y) {
+        (listener.callback)(event);
     }
     xrecord::XRecordFreeData(raw_data);
 }

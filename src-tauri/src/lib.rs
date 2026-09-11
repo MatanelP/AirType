@@ -861,10 +861,9 @@ fn position_and_show_indicator<R: tauri::Runtime>(app: &AppHandle<R>) {
     // Run window operations on main thread to avoid X11 threading issues
     let _ = app.run_on_main_thread(move || {
         if let Some(indicator) = app_clone.get_webview_window("indicator") {
-            let _ = indicator.set_size(tauri::Size::Logical(tauri::LogicalSize { width: win_w, height: win_h }));
-
             if let Ok(Some(monitor)) = indicator.primary_monitor() {
                 let size = monitor.size();
+                let origin = monitor.position();
                 let scale = monitor.scale_factor();
                 let logical_w = size.width as f64 / scale;
                 let logical_h = size.height as f64 / scale;
@@ -877,7 +876,18 @@ fn position_and_show_indicator<R: tauri::Runtime>(app: &AppHandle<R>) {
                 let y = logical_h - win_h - bottom_offset;
 
                 log::info!("Indicator position: ({}, {}) size: {}x{}", x, y, win_w, win_h);
-                let _ = indicator.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+                // Include the primary display's desktop origin and use its scale,
+                // even if the window was previously on a display with a different DPI.
+                let _ = indicator.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: origin.x + (x * scale).round() as i32,
+                    y: origin.y + (y * scale).round() as i32,
+                }));
+                let _ = indicator.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: (win_w * scale).round() as u32,
+                    height: (win_h * scale).round() as u32,
+                }));
+            } else {
+                let _ = indicator.set_size(tauri::Size::Logical(tauri::LogicalSize { width: win_w, height: win_h }));
             }
 
             let _ = indicator.show();

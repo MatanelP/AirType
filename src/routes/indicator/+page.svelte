@@ -2,11 +2,28 @@
   // @ts-nocheck
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
 
   let state = $state('idle');
   let language = $state('en');
   let errorSummary = $state('Error');
   let curGen = -1;
+
+  async function dismissIndicator() {
+    try {
+      // Hide the reusable window without changing the recording session.
+      await getCurrentWindow().hide();
+    } catch (error) {
+      console.error('Failed to dismiss indicator:', error);
+    }
+  }
+
+  let dismissLabel = $derived(language === 'he' ? 'הסתרת המחוון' : 'Dismiss indicator');
+  let dismissHint = $derived(
+    language === 'he'
+      ? 'הסתרת המחוון בלבד — הפעולה תמשיך'
+      : 'Dismiss indicator — the current action will continue'
+  );
 
   onMount(() => {
     // Single unified event from the backend — stale sessions are dropped by
@@ -67,7 +84,18 @@
     <span class="icon" class:pulse={state === 'recording' || state === 'warming'} class:spin={state === 'processing'}>
       {icon}
     </span>
-    <span class="label">{label}</span>
+    <span class="label" title={label}>{label}</span>
+    <button
+      class="dismiss"
+      type="button"
+      aria-label={dismissLabel}
+      title={dismissHint}
+      onclick={dismissIndicator}
+    >
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="m3 3 6 6m0-6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+      </svg>
+    </button>
   </div>
 </div>
 
@@ -95,7 +123,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 5px;
+    padding: 0 6px 0 10px;
     border-radius: 18px;
     transition: background 0.12s ease;
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
@@ -107,8 +136,40 @@
     text-shadow: 0 1px 2px rgba(0,0,0,0.2);
   }
 
-  .icon { font-size: 10px; }
-  .label { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
+  .icon { font-size: 10px; flex-shrink: 0; }
+  .label {
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .dismiss {
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+
+  .dismiss:hover {
+    background: rgba(255, 255, 255, 0.24);
+    color: white;
+  }
+
+  .dismiss:active { background: rgba(0, 0, 0, 0.12); }
+  .dismiss:focus-visible { outline: 2px solid white; outline-offset: -2px; }
 
   .icon.pulse { animation: pulse 1s infinite; }
   .icon.spin  { animation: spin 1s linear infinite; display: inline-block; }

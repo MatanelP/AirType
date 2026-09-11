@@ -116,8 +116,10 @@
           || localSettings.hotkey_mode !== prevMode) {
         await invoke('update_hotkeys').catch(e => console.error('update_hotkeys failed:', e));
       }
+      return true;
     } catch (e) {
       console.error('Failed to save settings:', e);
+      return false;
     } finally {
       isSaving = false;
     }
@@ -238,10 +240,25 @@
 
   async function previewIndicator() {
     try {
+      // Preview must use the latest inputs, even within the save debounce.
+      if (saveTimeout) clearTimeout(saveTimeout);
+      if (!await saveSettings()) return;
       await invoke('preview_indicator');
     } catch (e) {
       console.error('preview_indicator failed:', e);
     }
+  }
+
+  async function resetIndicatorDefaults() {
+    localSettings = {
+      ...localSettings,
+      indicator_width: 160,
+      indicator_height: 48,
+      indicator_align: 'center',
+      indicator_x_offset: 0,
+      indicator_bottom_offset: 80,
+    };
+    await previewIndicator();
   }
 
   // Dev-only: shown only in non-release builds (import.meta.env.DEV).
@@ -628,7 +645,7 @@
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-label">Bottom offset</span>
-                  <span class="setting-desc">Distance from screen bottom (px)</span>
+                  <span class="setting-desc">Gap below the indicator window (px)</span>
                 </div>
                 <input
                   type="number"
@@ -670,7 +687,7 @@
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-label">Height</span>
-                  <span class="setting-desc">Indicator window height (px)</span>
+                  <span class="setting-desc">Window height (px); grows upward from the bottom gap</span>
                 </div>
                 <input
                   type="number"
@@ -682,8 +699,16 @@
               </div>
 
               <div class="preview-row">
-                <button class="preview-btn" onclick={previewIndicator}>
+                <button class="preview-btn" onclick={previewIndicator} disabled={isSaving}>
                   Preview position ↗
+                </button>
+                <button
+                  class="preview-btn reset-dimensions-btn"
+                  onclick={resetIndicatorDefaults}
+                  disabled={isSaving}
+                  title="Restore 160 × 48 px, centered 80 px above the bottom of the primary display"
+                >
+                  Reset to defaults
                 </button>
                 <span class="preview-hint">Shows indicator for 2 s</span>
               </div>
@@ -1092,35 +1117,6 @@
     background-color: white;
   }
   
-  .download-progress {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: var(--color-surface-elevated, #1a1a25);
-    border-radius: var(--radius-md, 8px);
-    margin-top: 0.5rem;
-  }
-  
-  .progress-bar {
-    height: 6px;
-    background: var(--color-border, #2a2a35);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  
-  .progress-fill {
-    height: 100%;
-    background: var(--color-primary, #6366f1);
-    transition: width 0.3s ease;
-  }
-  
-  .progress-text {
-    font-size: 0.75rem;
-    color: var(--color-text-muted, #8888a0);
-    text-align: right;
-  }
-  
   .api-key-input {
     display: flex;
     gap: 0.25rem;
@@ -1168,33 +1164,6 @@
     padding: 0.25rem;
   }
   
-  .badge {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-weight: 500;
-  }
-  
-  .badge-success {
-    background: rgba(16, 185, 129, 0.15);
-    color: #10b981;
-  }
-  
-  .download-btn {
-    padding: 0.375rem 1rem;
-    background: var(--color-primary, #6366f1);
-    border: none;
-    border-radius: var(--radius-md, 8px);
-    color: white;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  
-  .download-btn:hover { opacity: 0.85; }
-  .download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
   /* Log viewer */
   .logs-header {
     display: flex;
@@ -1336,6 +1305,7 @@
 
   .preview-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem 0 0.25rem;
@@ -1352,6 +1322,11 @@
     transition: all 0.15s;
   }
   .preview-btn:hover { background: rgba(99, 102, 241, 0.12); }
+  .preview-btn:disabled { opacity: 0.6; cursor: default; }
+  .reset-dimensions-btn {
+    border-color: var(--color-border, #2a2a35);
+    color: var(--color-text-muted, #8888a0);
+  }
 
   .preview-hint {
     font-size: 0.6875rem;
