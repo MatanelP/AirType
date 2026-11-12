@@ -9,7 +9,22 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
+use super::punctuation::SPOKEN_PUNCTUATION_PROMPT;
+
 const RUNPOD_API_BASE: &str = "https://api.runpod.ai/v2";
+
+fn transcription_prompt(language: &str, spoken_punctuation: bool) -> Option<String> {
+    if language == "en" {
+        let mut prompt = "This is an English transcription. Please write the output in English script, using proper grammar and spelling.".to_string();
+        if spoken_punctuation {
+            prompt.push(' ');
+            prompt.push_str(SPOKEN_PUNCTUATION_PROMPT);
+        }
+        Some(prompt)
+    } else {
+        None
+    }
+}
 
 /// RunPod /run request payload
 #[derive(Serialize)]
@@ -63,18 +78,28 @@ struct RunPodStatusResponse {
 /// `on_status` is called with `"warming_up"` when the worker is cold-starting
 /// (job is IN_QUEUE) and `"processing"` when the worker is actively transcribing
 /// (job is IN_PROGRESS). Pass `|_| {}` if you don't need status updates.
+/// `spoken_punctuation` adds vocabulary context for English only.
 pub async fn transcribe_audio<F>(
     api_key: &str,
     endpoint_id: &str,
     audio_samples: &[f32],
     language: &str,
+    spoken_punctuation: bool,
     on_status: F,
 ) -> Result<String, String>
 where
     F: Fn(&str) + Send,
 {
     let wav_bytes = encode_wav(audio_samples, 16000);
-    transcribe_audio_wav(api_key, endpoint_id, &wav_bytes, language, on_status).await
+    transcribe_audio_wav(
+        api_key,
+        endpoint_id,
+        &wav_bytes,
+        language,
+        spoken_punctuation,
+        on_status,
+    )
+    .await
 }
 
 /// Transcribe Hebrew audio (convenience wrapper, no status callback).
@@ -83,7 +108,7 @@ pub async fn transcribe_hebrew(
     endpoint_id: &str,
     audio_samples: &[f32],
 ) -> Result<String, String> {
-    transcribe_audio(api_key, endpoint_id, audio_samples, "he", |_| {}).await
+    transcribe_audio(api_key, endpoint_id, audio_samples, "he", false, |_| {}).await
 }
 
 /// Transcribe WAV bytes using ivrit-ai on RunPod Serverless.
@@ -92,11 +117,13 @@ pub async fn transcribe_hebrew(
 /// completes, fails, or times out (120 s). `on_status` receives:
 /// - `"warming_up"` — worker is cold-starting (IN_QUEUE)
 /// - `"processing"` — worker is actively transcribing (IN_PROGRESS)
+/// `spoken_punctuation` adds vocabulary context for English only.
 pub async fn transcribe_audio_wav<F>(
     api_key: &str,
     endpoint_id: &str,
     wav_bytes: &[u8],
     language: &str,
+    spoken_punctuation: bool,
     on_status: F,
 ) -> Result<String, String>
 where
@@ -106,13 +133,14 @@ where
 
     let data_len = wav_bytes.len().saturating_sub(44);
     let duration = data_len as f64 / 2.0 / 16000.0;
-    log::info!("Sending {:.1}s of {} audio to RunPod endpoint {}...", duration, language, endpoint_id);
+    log::info!(
+        "Sending {:.1}s of {} audio to RunPod endpoint {}...",
+        duration,
+        language,
+        endpoint_id
+    );
 
-    let initial_prompt = if language == "en" {
-        Some("This is an English transcription. Please write the output in English script, using proper grammar and spelling.".to_string())
-    } else {
-        None
-    };
+    let initial_prompt = transcription_prompt(language, spoken_punctuation);
 
     let task = if language == "en" {
         "translate" // forces Whisper output to English
@@ -157,7 +185,11 @@ where
         .await
         .map_err(|e| format!("Failed to parse RunPod job response: {}", e))?;
 
-    log::info!("RunPod job submitted: {} (initial status: {})", job.id, job.status);
+    log::info!(
+        "RunPod job submitted: {} (initial status: {})",
+        job.id,
+        job.status
+    );
 
     // Fast-path: job already completed synchronously (rare but possible on warm workers)
     if job.status == "COMPLETED" {
@@ -216,7 +248,9 @@ where
                 return Err(format!(
                     "RunPod job {} ({})",
                     status_resp.status,
-                    status_resp.error.unwrap_or_else(|| "unknown error".to_string()),
+                    status_resp
+                        .error
+                        .unwrap_or_else(|| "unknown error".to_string()),
                 ));
             }
             other => {
@@ -233,7 +267,7 @@ pub async fn transcribe_hebrew_wav(
     endpoint_id: &str,
     wav_bytes: &[u8],
 ) -> Result<String, String> {
-    transcribe_audio_wav(api_key, endpoint_id, wav_bytes, "he", |_| {}).await
+    transcribe_audio_wav(api_key, endpoint_id, wav_bytes, "he", false, |_| {}).await
 }
 
 /// Extract transcription text from RunPod output
@@ -348,6 +382,38 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spoken_punctuation_disabled_preserves_runpod_prompt() {
+        assert_eq!(transcription_prompt("en", false).as_deref(), Some("This is an English transcription. Please write the output in English script, using proper grammar and spelling."));
+    }
+
+    #[test]
+    fn spoken_punctuation_enabled_adds_runpod_vocabulary_context() {
+        let prompt = transcription_prompt("en", true).unwrap();
+        assert!(prompt.starts_with(&transcription_prompt("en", false).unwrap()));
+        let prompt = prompt.to_ascii_lowercase();
+        for command in [
+            "comma",
+            "period",
+            "full stop",
+            "question mark",
+            "exclamation mark",
+            "colon",
+            "semicolon",
+            "new line",
+            "new paragraph",
+            "literal",
+        ] {
+            assert!(prompt.contains(command), "missing command: {command}");
+        }
+    }
+
+    #[test]
+    fn spoken_punctuation_never_changes_hebrew_runpod_prompt() {
+        assert_eq!(transcription_prompt("he", false), None);
+        assert_eq!(transcription_prompt("he", true), None);
+    }
 
     #[test]
     fn test_encode_wav_header() {

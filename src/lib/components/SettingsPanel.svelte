@@ -578,6 +578,63 @@
         </section>
         
         <section class="settings-section">
+          <h3>English dictation</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label" id="spoken-punctuation-label">Spoken punctuation</span>
+              <span class="setting-desc">Say punctuation to override automatic marks at that position.</span>
+            </div>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                aria-labelledby="spoken-punctuation-label"
+                aria-describedby="spoken-punctuation-help"
+                checked={localSettings.english_spoken_punctuation ?? false}
+                onchange={(e) => updateSetting('english_spoken_punctuation', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="section-note" id="spoken-punctuation-help">
+            English only. Say “comma,” “period” or “full stop,” “question mark,”
+            “exclamation mark,” “colon,” “semicolon,” “new line,” or “new paragraph.”
+            Say “literal comma” to write the word “comma”; use “literal” before any command to write its words.
+          </p>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label" id="remove-punctuation-label">Remove automatic punctuation</span>
+              <span class="setting-desc" id="remove-punctuation-help">Keep spoken commands, contractions, decimals, and URLs. Capitalization stays the same.</span>
+            </div>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                aria-labelledby="remove-punctuation-label"
+                aria-describedby="remove-punctuation-help"
+                checked={localSettings.english_remove_punctuation ?? false}
+                onchange={(e) => updateSetting('english_remove_punctuation', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label" id="lowercase-label">Lowercase text</span>
+              <span class="setting-desc" id="lowercase-help">Lowercase all English text, including names, acronyms, and URLs.</span>
+            </div>
+            <label class="toggle">
+              <input
+                type="checkbox"
+                aria-labelledby="lowercase-label"
+                aria-describedby="lowercase-help"
+                checked={localSettings.english_lowercase ?? false}
+                onchange={(e) => updateSetting('english_lowercase', e.target.checked)}
+              />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section">
           <h3>System</h3>
           
           <div class="setting-row">
@@ -1110,6 +1167,11 @@
   .toggle input:checked + .toggle-slider {
     background-color: var(--color-primary, #6366f1);
     border-color: var(--color-primary, #6366f1);
+  }
+
+  .toggle input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--color-primary, #6366f1);
+    outline-offset: 3px;
   }
   
   .toggle input:checked + .toggle-slider:before {
