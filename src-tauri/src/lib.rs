@@ -32,6 +32,7 @@ use transcription::{
     encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
     transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
+use transcription::should_discard_hebrew_filler;
 use tauri_plugin_updater::UpdaterExt;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -387,6 +388,17 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
     };
 
     log::info!("{} transcription: {}", language, transcription);
+
+    // Text alone cannot distinguish a real "תודה" from a hallucination.
+    // Suppress only a filler result backed by nonempty, finite digital silence.
+    // Any nonzero or unknown capture data keeps the transcript unchanged.
+    if should_discard_hebrew_filler(&transcription, &language, &samples) {
+        log::info!("Discarded Hebrew filler-only transcription on digital silence");
+        state.finish();
+        hide_indicator(&app, gen);
+        return Ok(String::new());
+    }
+
     *state.last_transcription.write() = transcription.clone();
     let _ = app.emit("transcription-complete", &transcription);
 
