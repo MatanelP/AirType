@@ -1,11 +1,37 @@
-TODOs
-- [REVIEWED - OK] indicator position + transparency: configurable bottom offset, alignment, size, x-offset via Settings > Advanced. shadow:false fixes the macOS box. preview button in settings.
-- [REVIEWED - FIXED] warmup indicator: switched RunPod from /runsync to /run+poll; IN_QUEUE shows orange "Warming up", IN_PROGRESS shows purple "Processing". OpenAI goes straight to Processing. FIX: hotkey RecordingStop handler was forcing "Processing" before stop_recording ran, making a cold worker flash purple→orange→purple; now emits "Warming up" first so state only moves forward. Also fixed FAILED/CANCELLED error message arg order.
-- [REVIEWED - OK] double status bar icon: removed trayIcon from tauri.conf.json (was creating a second icon alongside the programmatic one in setup).
-- [REVIEWED - OK] ui not showing on dock icon press: handle RunEvent::Reopen to show+focus main window when all windows are hidden.
-- on macos make sure the app can sart on login when the flag is set in the settings.
-- [IMPLEMENTED - UNDER REVIEW] self update - check for update and installs + auto update mechanism: Tauri updater plugin. Startup auto-check (toggle in Settings > Updates) emits update-available → banner in main window with Install & Restart (download progress bar). Manual "Check now" in settings. Backend commands check_for_update / download_and_install_update. CI signs updater artifacts + generates latest.json (needs TAURI_SIGNING_PRIVATE_KEY[_PASSWORD] secrets). Signing keypair generated at ~/.airtype-signing/airtype.key(.pub); pubkey embedded in tauri.conf.json.
-- changing hot key to alt, or control is crashing everything on macOS, need to fix that and thoghrly test. 
-- [IMPLEMENTED - UNDER REVIEW] history transcribes: disk-backed HistoryStore (history.json in config dir, max 100 entries). Each completed transcription prepended live via history-added event. Collapsible History panel in main UI with lang badge, timestamp, copy/delete per entry, Clear all. get/delete/clear_transcription_history commands.
-- [IMPLEMENTED - UNDER REVIEW] x on last transcription: dismiss button (×) added to the Last Transcription card. Clears lastTranscription state and calls clear_last_transcription backend command.
+# Release 1.5.0 validation
 
+Implementation status is separate from platform validation. Describing these
+features does not mean that the three PRs have been merged or released.
+
+## Before merging the release PR
+
+- Run frontend checks/build, Rust tests/build, and release tests on the combined
+  changes. Use Node.js 20+ for the supported setup path.
+- Verify real recordings on shared RunPod, custom RunPod, and OpenAI, including
+  formatting combinations, literal escapes, multiline insertion, Hebrew silence,
+  quiet speech, and a short phrase surrounded by long pauses.
+- On Linux, macOS, and Windows verify hotkeys (hold/toggle and modifier-only),
+  microphone permissions, text insertion, tray/window behavior, and saved settings.
+- Verify macOS launch-on-login and modifier-only hotkeys on the patched rdev build.
+- Verify an older installed client discovers and installs a signed update while
+  retaining settings and history. This requires published artifacts; manifest
+  tests alone do not establish it.
+- Merge #2 and #4 before #3; #3 starts the 1.5.0 release on merge to `main`.
+
+## Implemented features to retain
+
+Configurable indicator placement, warming/processing states, single tray icon,
+macOS window reopening, in-app logs, live hotkey re-registration, signed updater
+support, local history, and dismissible last-transcription preview are implemented.
+English formatting defaults off for legacy settings. The setup helper checks
+prerequisites and installs locked npm dependencies without installing system
+packages or downloading models.
+
+Review regressions are covered by tests: Hebrew filler suppression now keeps
+quiet/brief speech and unknown capture data, discarding only nonempty digital
+silence. Spoken commands preserve preceding URL syntax with removal on or off.
+Removal separately cleans email sentence marks and paired wrappers, including
+punctuation outside closing wrappers, without shortening the contained URL.
+Settings tests cover the actual disk-write boundary, redacted secret fields,
+unchanged IPC values, file permissions, and write failures without touching the
+host keyring.

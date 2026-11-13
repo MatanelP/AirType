@@ -46,6 +46,9 @@
     hotkey_english: 'Ctrl+Shift+E',
     hotkey_hebrew: 'Ctrl+Shift+H',
     hotkey_mode: 'hold',
+    english_spoken_punctuation: false,
+    english_remove_punctuation: false,
+    english_lowercase: false,
     start_minimized: false,
     start_on_login: false,
   });
@@ -802,6 +805,7 @@
   }
   
   .preview-text {
+    white-space: pre-wrap;
     font-size: 0.875rem;
     color: var(--color-text);
     line-height: 1.25;

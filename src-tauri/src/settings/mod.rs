@@ -69,6 +69,17 @@ pub struct Settings {
     /// English transcription endpoint mode
     #[serde(default)]
     pub english_endpoint_type: EnglishEndpointType,
+
+    /// Interpret spoken punctuation commands in English dictation.
+    #[serde(default)]
+    pub english_spoken_punctuation: bool,
+
+    /// Remove automatic punctuation from English dictation.
+    #[serde(default)]
+    pub english_remove_punctuation: bool,
+    /// Convert English dictation to lowercase.
+    #[serde(default)]
+    pub english_lowercase: bool,
     
     /// Optional separate RunPod Endpoint ID for English (when english_endpoint_type is CustomRunPod)
     #[serde(default)]
@@ -136,6 +147,9 @@ impl Default for Settings {
             runpod_api_key: None,
             
             english_endpoint_type: EnglishEndpointType::default(),
+            english_spoken_punctuation: false,
+            english_remove_punctuation: false,
+            english_lowercase: false,
             english_custom_runpod_endpoint_id: None,
             english_custom_runpod_api_key: None,
             english_openai_api_key: None,
@@ -181,6 +195,67 @@ mod tests {
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(settings.hotkey_english, deserialized.hotkey_english);
         assert_eq!(settings.hotkey_hebrew, deserialized.hotkey_hebrew);
+    }
+
+    #[test]
+    fn spoken_punctuation_defaults_off_for_new_and_legacy_settings() {
+        let settings = Settings::default();
+        assert!(!settings.english_spoken_punctuation);
+
+        let mut legacy = serde_json::to_value(&settings).unwrap();
+        legacy.as_object_mut().unwrap().remove("english_spoken_punctuation");
+        let loaded: Settings = serde_json::from_value(legacy).unwrap();
+        assert!(!loaded.english_spoken_punctuation);
+        assert_eq!(loaded.hotkey_english, settings.hotkey_english);
+    }
+
+    #[test]
+    fn spoken_punctuation_enabled_survives_settings_roundtrip() {
+        let settings = Settings {
+            english_spoken_punctuation: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["english_spoken_punctuation"], true);
+        let loaded: Settings = serde_json::from_value(json).unwrap();
+        assert!(loaded.english_spoken_punctuation);
+    }
+
+    #[test]
+    fn english_text_options_default_off_for_new_and_legacy_settings() {
+        let settings = Settings::default();
+        assert!(!settings.english_remove_punctuation);
+        assert!(!settings.english_lowercase);
+
+        let mut legacy = serde_json::to_value(&settings).unwrap();
+        let fields = legacy.as_object_mut().unwrap();
+        fields.remove("english_spoken_punctuation");
+        fields.remove("english_remove_punctuation");
+        fields.remove("english_lowercase");
+        let loaded: Settings = serde_json::from_value(legacy).unwrap();
+        assert!(!loaded.english_spoken_punctuation);
+        assert!(!loaded.english_remove_punctuation);
+        assert!(!loaded.english_lowercase);
+    }
+
+    #[test]
+    fn english_text_options_roundtrip_independently() {
+        for bits in 0..8 {
+            let spoken = bits & 1 != 0;
+            let remove_punctuation = bits & 2 != 0;
+            let lowercase = bits & 4 != 0;
+            let settings = Settings {
+                english_spoken_punctuation: spoken,
+                english_remove_punctuation: remove_punctuation,
+                english_lowercase: lowercase,
+                ..Settings::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let loaded: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(loaded.english_remove_punctuation, remove_punctuation);
+            assert_eq!(loaded.english_lowercase, lowercase);
+            assert_eq!(loaded.english_spoken_punctuation, spoken);
+        }
     }
 }
 

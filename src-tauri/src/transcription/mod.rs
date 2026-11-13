@@ -4,10 +4,12 @@
 
 mod hebrew_filler;
 mod openai_batch;
+mod punctuation;
 mod runpod;
 mod test_audio;
 
 pub use hebrew_filler::{is_hebrew_filler, should_discard_hebrew_filler};
 pub use openai_batch::transcribe_english;
+pub use punctuation::format_transcription;
 pub use runpod::{encode_wav, transcribe_audio, transcribe_audio_wav, transcribe_hebrew, transcribe_hebrew_wav, validate_runpod};
 pub use test_audio::{english_test_wav, hebrew_test_wav};

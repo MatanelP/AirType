@@ -4,6 +4,12 @@
 
 # rdev
 
+> **AirType vendored fork:** rdev 0.5.3 is selected through the application's
+> Cargo `[patch.crates-io]`. On macOS, `src/macos/keyboard.rs` skips text-input-source
+> lookup on the background listener thread to avoid crashes. Key events remain
+> available, but that path does not populate `Event::name`. The upstream text-name
+> examples below do not apply to this macOS listener. Preserve the patch when updating.
+
 Simple library to listen and send events **globally** to keyboard and mouse on macOS, Windows and Linux
 (x11).
 

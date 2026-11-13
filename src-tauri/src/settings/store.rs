@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use keyring::Entry;
 use parking_lot::RwLock;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const APP_NAME: &str = "airtype";
@@ -127,6 +127,12 @@ impl SettingsStore {
         Self::persist_secret(RUNPOD_API_KEY_ENTRY, settings.runpod_api_key.as_deref())?;
         Self::persist_secret(CUSTOM_RUNPOD_API_KEY_ENTRY, settings.english_custom_runpod_api_key.as_deref())?;
 
+        Self::write_disk_settings(&settings_path, settings)
+    }
+
+    /// Write a redacted settings file without changing the in-memory IPC data.
+    /// Secret persistence stays in `save`, before this disk-only boundary.
+    fn write_disk_settings(settings_path: &Path, settings: &Settings) -> Result<()> {
         let mut disk_settings = settings.clone();
         disk_settings.english_openai_api_key = None;
         disk_settings.runpod_api_key = None;
@@ -135,15 +141,15 @@ impl SettingsStore {
         let json = serde_json::to_string_pretty(&disk_settings)
             .with_context(|| "Failed to serialize settings")?;
 
-        fs::write(&settings_path, &json)
+        fs::write(settings_path, &json)
             .with_context(|| format!("Failed to write settings file: {:?}", settings_path))?;
 
-        // Restrict file permissions (owner-only) since it may contain API keys
+        // Restrict settings file access to the owner.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(0o600);
-            let _ = fs::set_permissions(&settings_path, perms);
+            let _ = fs::set_permissions(settings_path, perms);
         }
 
         Ok(())
@@ -291,9 +297,7 @@ mod tests {
                 ..Settings::default()
             };
 
-            // Write settings
-            let json = serde_json::to_string_pretty(&settings).unwrap();
-            fs::write(&settings_path, json).unwrap();
+            SettingsStore::write_disk_settings(&settings_path, &settings).unwrap();
 
             // Read settings back
             let contents = fs::read_to_string(&settings_path).unwrap();
@@ -325,20 +329,71 @@ mod tests {
     }
 
     #[test]
-    fn test_sensitive_settings_not_serialized() {
-        let settings = Settings {
-            english_openai_api_key: Some("openai-secret".to_string()),
-            runpod_api_key: Some("runpod-secret".to_string()),
-            english_custom_runpod_api_key: Some("custom-runpod-secret".to_string()),
-            ..Settings::default()
-        };
+    fn disk_settings_exclude_secrets_without_mutating_ipc_settings() {
+        with_temp_config(|config_dir| {
+            let settings_path = config_dir.join(SETTINGS_FILENAME);
+            let settings = Settings {
+                english_openai_api_key: Some("test-only-openai-credential".to_string()),
+                runpod_api_key: Some("test-only-runpod-credential".to_string()),
+                english_custom_runpod_api_key: Some("test-only-custom-credential".to_string()),
+                hotkey_english: "Alt+E".to_string(),
+                english_spoken_punctuation: true,
+                ..Settings::default()
+            };
+            let ipc_before = serde_json::to_value(&settings).unwrap();
 
-        let json = serde_json::to_string_pretty(&settings).unwrap();
-        assert!(!json.contains("openai-secret"));
-        assert!(!json.contains("runpod-secret"));
-        assert!(!json.contains("custom-runpod-secret"));
-        assert!(json.contains("english_openai_api_key"));
-        assert!(json.contains("runpod_api_key"));
-        assert!(json.contains("english_custom_runpod_api_key"));
+            SettingsStore::write_disk_settings(&settings_path, &settings).unwrap();
+
+            let contents = fs::read_to_string(&settings_path).unwrap();
+            let disk: serde_json::Value = serde_json::from_str(&contents).unwrap();
+            for field in [
+                "english_openai_api_key",
+                "runpod_api_key",
+                "english_custom_runpod_api_key",
+            ] {
+                assert_eq!(disk.get(field), Some(&serde_json::Value::Null));
+                let fixture = ipc_before[field].as_str().unwrap();
+                assert!(!contents.contains(fixture));
+            }
+            assert_eq!(disk["hotkey_english"], "Alt+E");
+            assert_eq!(disk["english_spoken_punctuation"], true);
+
+            // IPC carries credentials for the settings UI; disk redaction must
+            // operate on a clone rather than changing that contract.
+            let ipc_after = serde_json::to_value(&settings).unwrap();
+            assert_eq!(ipc_after, ipc_before);
+            assert_eq!(ipc_after["english_openai_api_key"], "test-only-openai-credential");
+            assert_eq!(ipc_after["runpod_api_key"], "test-only-runpod-credential");
+            assert_eq!(ipc_after["english_custom_runpod_api_key"], "test-only-custom-credential");
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn disk_settings_restrict_existing_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        with_temp_config(|config_dir| {
+            let settings_path = config_dir.join(SETTINGS_FILENAME);
+            fs::write(&settings_path, "old settings").unwrap();
+            fs::set_permissions(&settings_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+            SettingsStore::write_disk_settings(&settings_path, &Settings::default()).unwrap();
+
+            let permissions = fs::metadata(&settings_path).unwrap().permissions();
+            assert_eq!(permissions.mode() & 0o777, 0o600);
+        });
+    }
+
+    #[test]
+    fn disk_settings_report_write_errors() {
+        with_temp_config(|config_dir| {
+            let missing_path = config_dir.join("missing-directory").join(SETTINGS_FILENAME);
+
+            let result = SettingsStore::write_disk_settings(&missing_path, &Settings::default());
+
+            assert!(result.unwrap_err().to_string().contains("Failed to write settings file"));
+            assert!(!missing_path.exists());
+        });
     }
 }

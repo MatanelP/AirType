@@ -29,7 +29,7 @@ use hotkeys::{
 use injection::TextInjector;
 use settings::{EnglishEndpointType, IndicatorAlign, Settings, SettingsStore};
 use transcription::{
-    encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
+    encode_wav, english_test_wav, format_transcription, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
     transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
 use transcription::should_discard_hebrew_filler;
@@ -353,7 +353,7 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
             .filter(|k| !k.is_empty())
             .ok_or_else(|| "Hebrew default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
 
-        transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
+        transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, false, status_cb).await?
     } else {
         match settings.english_endpoint_type {
             EnglishEndpointType::SharedRunPod => {
@@ -364,7 +364,10 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "Default RunPod Endpoint ID not set. Go to Settings to add it.".to_string())?;
 
-                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
+                transcribe_audio(
+                    &rp_key, &rp_endpoint, &samples, &language,
+                    settings.english_spoken_punctuation, status_cb,
+                ).await?
             }
             EnglishEndpointType::CustomRunPod => {
                 let rp_key = settings.english_custom_runpod_api_key
@@ -374,7 +377,10 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| "Custom RunPod Endpoint ID for English not set. Go to Settings to add it.".to_string())?;
 
-                transcribe_audio(&rp_key, &rp_endpoint, &samples, &language, status_cb).await?
+                transcribe_audio(
+                    &rp_key, &rp_endpoint, &samples, &language,
+                    settings.english_spoken_punctuation, status_cb,
+                ).await?
             }
             EnglishEndpointType::OpenAI => {
                 let openai_key = settings.english_openai_api_key
@@ -382,11 +388,15 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
                     .ok_or_else(|| "OpenAI API key not set. Go to Settings to add it.".to_string())?;
 
                 let wav_bytes = encode_wav(&samples, 16000);
-                transcribe_english(&openai_key, &wav_bytes).await?
+                transcribe_english(&openai_key, &wav_bytes, settings.english_spoken_punctuation).await?
             }
         }
     };
 
+    let transcription = format_transcription(
+        &transcription, &language, settings.english_spoken_punctuation,
+        settings.english_remove_punctuation, settings.english_lowercase,
+    );
     log::info!("{} transcription: {}", language, transcription);
 
     // Text alone cannot distinguish a real "תודה" from a hallucination.
@@ -712,7 +722,8 @@ async fn validate_runpod_key(api_key: String, endpoint_id: String) -> Result<boo
 async fn run_transcription_test(language: String, state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.get_settings();
 
-    match language.to_lowercase().as_str() {
+    let language = language.to_lowercase();
+    let transcription = match language.as_str() {
         "en" => {
             match settings.english_endpoint_type {
                 settings::EnglishEndpointType::SharedRunPod => {
@@ -722,7 +733,10 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
                     let rp_endpoint = settings.runpod_endpoint_id
                         .filter(|k| !k.is_empty())
                         .ok_or_else(|| "Default RunPod Endpoint ID not set".to_string())?;
-                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en", |_| {}).await
+                    transcribe_audio_wav(
+                        &rp_key, &rp_endpoint, &english_test_wav(), "en",
+                        settings.english_spoken_punctuation, |_| {},
+                    ).await
                 }
                 settings::EnglishEndpointType::CustomRunPod => {
                     let rp_key = settings.english_custom_runpod_api_key
@@ -731,13 +745,16 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
                     let rp_endpoint = settings.english_custom_runpod_endpoint_id
                         .filter(|k| !k.is_empty())
                         .ok_or_else(|| "Custom RunPod Endpoint ID for English not set".to_string())?;
-                    transcribe_audio_wav(&rp_key, &rp_endpoint, &english_test_wav(), "en", |_| {}).await
+                    transcribe_audio_wav(
+                        &rp_key, &rp_endpoint, &english_test_wav(), "en",
+                        settings.english_spoken_punctuation, |_| {},
+                    ).await
                 }
                 settings::EnglishEndpointType::OpenAI => {
                     let api_key = settings.english_openai_api_key
                         .filter(|k| !k.is_empty())
                         .ok_or_else(|| "OpenAI API key not set".to_string())?;
-                    transcribe_english(&api_key, english_test_wav()).await
+                    transcribe_english(&api_key, english_test_wav(), settings.english_spoken_punctuation).await
                 }
             }
         }
@@ -751,7 +768,11 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
             transcribe_hebrew_wav(&rp_key, &rp_endpoint, hebrew_test_wav()).await
         }
         other => Err(format!("Unsupported test language: {}", other)),
-    }
+    }?;
+    Ok(format_transcription(
+        &transcription, &language, settings.english_spoken_punctuation,
+        settings.english_remove_punctuation, settings.english_lowercase,
+    ))
 }
 
 
