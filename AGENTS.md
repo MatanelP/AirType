@@ -13,6 +13,9 @@
 - Keep URL/email tokens opaque at spoken-command boundaries. Hebrew filler
   suppression requires nonempty finite digital silence in every capture window;
   retain any nonzero or uncertain signal rather than applying an RMS cutoff.
+- Distinguish meaningful URL suffixes from email sentence marks. When removing
+  punctuation, clean paired wrappers and their external suffix together; retain
+  the contained URL syntax and test with spoken commands both on and off.
 - Vendored rdev 0.5.3 skips macOS text-input-source lookup on the listener thread.
   Preserve the patch and consult its README before updating it.
 

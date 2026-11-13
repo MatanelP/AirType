@@ -147,6 +147,8 @@ Under **Settings → English dictation**, enable any of the three formatting opt
 independently. All default to off, including when loading older settings. See
 [English dictation formatting](docs/english-dictation.md) for commands and limitations.
 Endpoint tests apply formatting too; they do not test microphone capture or insertion.
+Punctuation removal cleans email sentence marks and paired wrappers while
+preserving meaningful URL suffixes inside the value.
 
 Hebrew filler filtering suppresses standalone `תודה` / `תודה רבה` only when a
 nonempty capture is entirely finite digital silence, checked in short windows.

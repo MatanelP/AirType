@@ -30,6 +30,8 @@ packages or downloading models.
 Review regressions are covered by tests: Hebrew filler suppression now keeps
 quiet/brief speech and unknown capture data, discarding only nonempty digital
 silence. Spoken commands preserve preceding URL syntax with removal on or off.
+Removal separately cleans email sentence marks and paired wrappers, including
+punctuation outside closing wrappers, without shortening the contained URL.
 Settings tests cover the actual disk-write boundary, redacted secret fields,
 unchanged IPC values, file permissions, and write failures without touching the
 host keyring.

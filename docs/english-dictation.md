@@ -37,6 +37,12 @@ Removal treats attached trailing periods, commas, and ellipses as sentence marks
 Those characters remain ambiguous when they are intentionally part of a URL.
 With removal off, spoken commands preserve the complete preceding URL token.
 
+Email sentence marks are external punctuation: with removal enabled,
+`Contact (user@example.com); next.` becomes `Contact user@example.com next`.
+Paired wrappers and marks after their closing delimiter are removed together.
+URL suffixes inside those wrappers stay intact: `(https://example.com/?);`
+becomes `https://example.com/?`. These rules apply with spoken commands on or off.
+
 The same final text is used for the preview, history, copying, and insertion.
 Formatting happens locally after transcription; it adds no model call. Provider
 prompts supply command examples, but speech recognition can still omit or

@@ -19,6 +19,10 @@ English formatting runs after recognition and before preview, history, copying,
 and insertion. See [English dictation](docs/english-dictation.md). Turn all three
 options off to compare provider text with formatted output. Missing command words
 cannot be reconstructed by formatting.
+When checking value formatting, distinguish URL suffixes from email sentence
+marks and punctuation outside paired wrappers. Removal should turn
+`(user@example.com);` into `user@example.com` and `(https://example.com/?);`
+into `https://example.com/?`, with spoken commands either on or off.
 
 Hebrew filler filtering checks standalone `תודה` / `תודה רבה` against nonempty
 capture data in 10 ms windows. A result is discarded only if every captured sample

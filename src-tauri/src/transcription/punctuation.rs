@@ -38,9 +38,53 @@ fn punctuation(c: char) -> bool {
         )
 }
 
+/// Paired wrappers and marks following their closing delimiter are external to
+/// a value. Strip those together before deciding which suffixes belong to it.
+fn unwrapped_value(token: &str) -> &str {
+    let mut core = token;
+    loop {
+        let Some(open) = core.chars().next() else {
+            break;
+        };
+        let close = match open {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            '"' => '"',
+            '\'' => '\'',
+            '“' => '”',
+            '‘' => '’',
+            '«' => '»',
+            _ => break,
+        };
+        let body = &core[open.len_utf8()..];
+        let mut depth = 1;
+        let closing = body.char_indices().find_map(|(index, c)| {
+            if c == close {
+                depth -= 1;
+            } else if c == open {
+                depth += 1;
+            }
+            (depth == 0).then_some(index)
+        });
+        let Some(end) = closing else { break };
+        if !body[end + close.len_utf8()..].chars().all(punctuation) {
+            break;
+        }
+        core = &body[..end];
+    }
+    core.trim_start_matches(|c| matches!(c, '"' | '\'' | '(' | '[' | '{' | '“' | '‘' | '<' | '«'))
+}
+
+fn url_value(core: &str) -> bool {
+    let lower = core.to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("www.")
+}
+
 fn value_core(token: &str) -> &str {
-    let mut core =
-        token.trim_start_matches(|c| matches!(c, '"' | '\'' | '(' | '[' | '“' | '‘' | '<'));
+    let mut core = unwrapped_value(token);
+    let is_url = url_value(core);
     while let Some(last) = core.chars().next_back() {
         let unbalanced = match last {
             ')' => core.matches(')').count() > core.matches('(').count(),
@@ -48,7 +92,10 @@ fn value_core(token: &str) -> &str {
             '>' => true,
             _ => false,
         };
-        if unbalanced || matches!(last, '.' | ',' | '"' | '\'' | '”' | '’' | '…') {
+        if unbalanced
+            || matches!(last, '.' | ',' | '"' | '\'' | '”' | '’' | '…')
+            || !is_url && matches!(last, '!' | '?' | ';' | ':')
+        {
             core = &core[..core.len() - last.len_utf8()];
         } else {
             break;
@@ -58,11 +105,7 @@ fn value_core(token: &str) -> &str {
 }
 
 fn opaque_value(core: &str) -> bool {
-    let lower = core.to_ascii_lowercase();
-    lower.starts_with("https://")
-        || lower.starts_with("http://")
-        || lower.starts_with("www.")
-        || core.contains('@') && core.contains('.')
+    url_value(core) || core.contains('@') && core.contains('.')
 }
 
 fn remove_auto_punctuation(text: &str) -> String {
@@ -226,7 +269,17 @@ fn words(text: &str) -> Vec<Word<'_>> {
             let start = offset;
             offset += chunk.len();
             let token = chunk.trim_end_matches(char::is_whitespace);
-            let protected_end = opaque_value(value_core(token)).then_some(start + token.len());
+            let unwrapped = unwrapped_value(token);
+            let value = if url_value(unwrapped) {
+                unwrapped
+            } else {
+                value_core(token)
+            };
+            let protected_end = if opaque_value(value) {
+                Some(start + token.find(value).unwrap() + value.len())
+            } else {
+                None
+            };
             let core = chunk.trim_matches(|c: char| {
                 c.is_whitespace()
                     || boundary(c)
@@ -734,6 +787,101 @@ mod tests {
         assert_eq!(
             process("hello period user@example.com"),
             "hello. user@example.com"
+        );
+    }
+
+    #[test]
+    fn removal_cleans_email_sentence_marks_and_wrappers() {
+        for spoken in [false, true] {
+            for (input, expected) in [
+                ("Contact user@example.com!", "Contact user@example.com"),
+                (
+                    "Contact user@example.com; then continue.",
+                    "Contact user@example.com then continue",
+                ),
+                (
+                    "Contact (user@example.com); next.",
+                    "Contact user@example.com next",
+                ),
+                (
+                    "Contact [user@example.com]?! next.",
+                    "Contact user@example.com next",
+                ),
+                (
+                    "Contact \"user@example.com\"! next.",
+                    "Contact user@example.com next",
+                ),
+                (
+                    "Contact ([user.name+tag@example.com]); next.",
+                    "Contact user.name+tag@example.com next",
+                ),
+            ] {
+                assert_eq!(
+                    format_transcription(input, "en", spoken, true, false),
+                    expected,
+                    "spoken={spoken}: {input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn removal_cleans_external_wrappers_without_shortening_url_values() {
+        for spoken in [false, true] {
+            for (input, expected) in [
+                (
+                    "Visit (https://example.com/?); next.",
+                    "Visit https://example.com/? next",
+                ),
+                (
+                    "Visit [https://example.com/path;]! next.",
+                    "Visit https://example.com/path; next",
+                ),
+                (
+                    "Visit \"https://example.com/!\"; next.",
+                    "Visit https://example.com/! next",
+                ),
+                (
+                    "Visit (https://example.com/a_(b);)! next.",
+                    "Visit https://example.com/a_(b); next",
+                ),
+                (
+                    "Visit ([https://example.com/?]); next.",
+                    "Visit https://example.com/? next",
+                ),
+            ] {
+                assert_eq!(
+                    format_transcription(input, "en", spoken, true, false),
+                    expected,
+                    "spoken={spoken}: {input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spoken_commands_override_only_punctuation_outside_addresses_and_wrappers() {
+        assert_eq!(
+            process("Contact user@example.com! comma next"),
+            "Contact user@example.com, next"
+        );
+        assert_eq!(
+            process("Visit (https://example.com/?); comma next"),
+            "Visit (https://example.com/?), next"
+        );
+        assert_eq!(
+            process("Visit \"https://example.com/path;\"! comma next"),
+            "Visit \"https://example.com/path;\", next"
+        );
+        assert_eq!(
+            format_transcription(
+                "Contact (user@example.com); comma next",
+                "en",
+                true,
+                true,
+                false
+            ),
+            "Contact user@example.com, next"
         );
     }
 }
