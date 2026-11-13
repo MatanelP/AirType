@@ -52,6 +52,25 @@
     spokenHelpMaxHeight = spokenHelpAbove ? above : below;
   }
 
+  function scrollSpokenHelp(event) {
+    if (!spokenHelpVisible || !spokenHelpTooltip || event.altKey || event.ctrlKey || event.metaKey
+        || spokenHelpTooltip.scrollHeight <= spokenHelpTooltip.clientHeight) return;
+    const page = spokenHelpTooltip.clientHeight * 0.8;
+    let next;
+    switch (event.key) {
+      case 'ArrowDown': next = spokenHelpTooltip.scrollTop + 32; break;
+      case 'ArrowUp': next = spokenHelpTooltip.scrollTop - 32; break;
+      case 'PageDown': next = spokenHelpTooltip.scrollTop + page; break;
+      case 'PageUp': next = spokenHelpTooltip.scrollTop - page; break;
+      case 'Home': next = 0; break;
+      case 'End': next = spokenHelpTooltip.scrollHeight; break;
+      default: return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    spokenHelpTooltip.scrollTop = Math.max(0, next);
+  }
+
   // Sync localSettings when settings prop changes
   $effect(() => {
     localSettings = { ...settings };
@@ -643,6 +662,8 @@
                   aria-describedby="spoken-punctuation-help"
                   aria-controls="spoken-punctuation-help"
                   aria-expanded={spokenHelpVisible}
+                  aria-keyshortcuts="ArrowDown ArrowUp PageDown PageUp Home End Escape"
+                  onkeydown={scrollSpokenHelp}
                   onclick={() => { spokenHelpPinned = !spokenHelpPinned; spokenHelpDismissed = !spokenHelpPinned; }}
                 >?</button>
                 <div
@@ -660,6 +681,7 @@
                   “colon,” “semicolon,” “new line,” or “new paragraph.”
                   Each command adds a mark: “dot dot dot” writes “...”.
                   Say “literal comma” to write the word “comma”; use “literal” before any command to write its words.
+                  If clipped, use arrow or PageUp/PageDown keys while this help button is focused.
                 </div>
               </div>
             </div>

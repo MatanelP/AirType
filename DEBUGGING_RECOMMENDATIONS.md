@@ -26,6 +26,9 @@ commands accumulate; only adjacent automatic punctuation is removed. Test
 `I`, its contractions, acronyms, names/ambiguous capitals, paragraph openers, and
 URL/email spelling. Commas, abbreviations, and decimal points do not trigger case
 cleanup. The obsolete standalone lowercase setting is ignored on legacy load.
+At minimum window height, focus the spoken-help button and use PageDown/End to
+read clipped instructions. The tooltip should scroll while focus and the outer
+settings panel stay fixed; Escape should still dismiss it.
 When checking value formatting, distinguish URL suffixes from email sentence
 marks and punctuation outside paired wrappers. Removal should turn
 `(user@example.com);` into `user@example.com` and `(https://example.com/?);`

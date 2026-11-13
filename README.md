@@ -147,7 +147,8 @@ For browser-only Settings layout and tooltip checks, start `npm run dev`, then
 run `npm run test:settings-ui` in another terminal with Node.js 20+ and Chrome
 installed. Set `AIRTYPE_CHROME_PATH` if Chrome is not at `/usr/bin/google-chrome`;
 `AIRTYPE_UI_URL` can select another local development-server URL. This checks
-350px/420px windows, full switch size, and tooltip pointer/keyboard/touch behavior.
+350px/420px widths at 400px/800px heights, full switch size, and tooltip
+pointer/keyboard/touch behavior, including keyboard scrolling of clipped help.
 It does not test native recording or text insertion.
 
 ## Setup

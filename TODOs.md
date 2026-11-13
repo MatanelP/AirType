@@ -15,7 +15,8 @@ remain separate. The 1.5.1 follow-up preserves every spoken punctuation command.
   times producing `???` and “dot dot dot” producing `...`, with removal on/off.
   Check conservative sentence-case cleanup, preserved `I`/contractions, names,
   acronyms, decimals, abbreviations, and paragraph openers. Check the help tooltip
-  by pointer, keyboard, and touch, and full switch width in narrow windows.
+  by pointer, keyboard, and touch, including clipped-help scrolling at 400px
+  height, and full switch width in narrow windows.
 - On Linux, macOS, and Windows verify hotkeys (hold/toggle and modifier-only),
   microphone permissions, text insertion, tray/window behavior, and saved settings.
 - Verify macOS launch-on-login and modifier-only hotkeys on the patched rdev build.

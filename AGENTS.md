@@ -18,6 +18,8 @@
   lowercase preference benign when loading legacy settings; do not restore its UI.
 - Settings switches must not shrink. Keep detailed spoken-command help in an
   accessible tooltip that works by pointer, keyboard, and click/touch.
+  Clipped help must support keyboard scrolling from the focused trigger while
+  preserving focus and outer-panel position, including the 400px minimum height.
 - Keep URL/email tokens opaque at spoken-command boundaries. Hebrew filler
   suppression requires nonempty finite digital silence in every capture window;
   retain any nonzero or uncertain signal rather than applying an RMS cutoff.

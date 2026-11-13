@@ -78,6 +78,9 @@ Live recognition accuracy still needs representative recordings on each provider
 
 The compact help tooltip supports hover, keyboard focus, click/touch, and Escape.
 It chooses above/below placement to fit the visible settings area; long tooltips
-scroll when necessary. Switches retain their full 44×24 size while labels wrap.
+scroll when necessary. With focus on the help button, Arrow/PageUp/PageDown keys
+scroll clipped text; Home/End reach its beginning/end without moving focus or the
+outer panel. Switches retain their full 44×24 size while labels wrap.
 `npm run test:settings-ui` checks these behaviors against a running local frontend
-at 350px and 420px widths using installed Chrome, without exercising native IPC.
+at 350px/420px widths and 400px/800px heights using installed Chrome, without
+exercising native IPC.

@@ -24,8 +24,11 @@ async function tooltipVisible(page, visible) {
 }
 
 try {
-  for (const width of [350, 420]) {
-    const context = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: true });
+  for (const { width, height } of [
+    { width: 350, height: 400 }, { width: 420, height: 400 },
+    { width: 350, height: 800 }, { width: 420, height: 800 },
+  ]) {
+    const context = await browser.newContext({ viewport: { width, height }, hasTouch: true });
     try {
       const page = await context.newPage();
       page.setDefaultTimeout(5000);
@@ -59,6 +62,31 @@ try {
       await tooltipVisible(page, false);
       await help.focus();
       await tooltipVisible(page, true);
+      const metrics = () => page.locator('#spoken-punctuation-help').evaluate((tip) => ({
+        client: tip.clientHeight, total: tip.scrollHeight, top: tip.scrollTop,
+        panel: tip.closest('.settings-content').scrollTop,
+        focus: document.activeElement?.getAttribute('aria-label'),
+      }));
+      const before = await metrics();
+      if (width === 350 && height === 400) assert.ok(before.total > before.client, 'Exercise clipped help at minimum window size');
+      if (before.total > before.client) {
+        await page.keyboard.press('PageDown');
+        const after = await metrics();
+        assert.ok(after.top > 0, 'PageDown scrolls clipped tooltip');
+        assert.ok(Math.abs(after.panel - before.panel) < 1, 'Tooltip scrolling must not scroll the outer panel');
+        assert.equal(after.focus, 'Help with spoken punctuation', 'Keyboard scrolling preserves trigger focus');
+        await page.keyboard.press('Home');
+        assert.equal((await metrics()).top, 0);
+        await page.keyboard.press('ArrowDown');
+        assert.ok((await metrics()).top > 0, 'ArrowDown scrolls clipped help');
+        await page.keyboard.press('ArrowUp');
+        assert.equal((await metrics()).top, 0);
+        await page.keyboard.press('End');
+        const end = await metrics();
+        assert.ok(end.top >= end.total - end.client - 1, 'End exposes the last help lines');
+        await page.keyboard.press('PageUp');
+        assert.ok((await metrics()).top < end.top, 'PageUp scrolls toward the beginning');
+      }
       await page.keyboard.press('Escape');
       await tooltipVisible(page, false);
       await help.tap();
@@ -66,11 +94,11 @@ try {
       const bounds = await page.locator('#spoken-punctuation-help').boundingBox();
       assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width, 'Tooltip fits horizontally');
       const content = await panel.locator('.settings-content').boundingBox();
-      assert.ok(content && bounds.y >= content.y && bounds.y + bounds.height <= Math.min(800, content.y + content.height), 'Tooltip stays inside the visible scroll area');
-      if (screenshotDir) await page.screenshot({ path: join(screenshotDir, `settings-${width}.png`) });
+      assert.ok(content && bounds.y >= content.y && bounds.y + bounds.height <= Math.min(height, content.y + content.height), 'Tooltip stays inside the visible scroll area');
+      if (screenshotDir) await page.screenshot({ path: join(screenshotDir, `settings-${width}x${height}.png`) });
       await help.tap();
       await tooltipVisible(page, false);
-      console.log(`Settings ${width}px: ${switches.length} full-size switches; tooltip hover/focus/touch/Escape passed`);
+      console.log(`Settings ${width}x${height}: ${switches.length} full-size switches; tooltip pointer/focus/touch/keyboard/Escape passed`);
     } finally {
       await context.close();
     }
