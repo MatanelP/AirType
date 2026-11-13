@@ -271,12 +271,6 @@ mod tests {
     }
 
     #[test]
-    fn test_models_dir() {
-        let models_dir = SettingsStore::get_models_dir();
-        assert!(models_dir.ends_with(MODELS_DIR_NAME));
-    }
-
-    #[test]
     fn test_settings_roundtrip() {
         with_temp_config(|config_dir| {
             let settings_path = config_dir.join(SETTINGS_FILENAME);

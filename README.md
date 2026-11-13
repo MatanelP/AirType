@@ -49,12 +49,12 @@ AirType uses robust Cloud API endpoints to ensure the highest transcription qual
 
 **Linux / macOS**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.sh | sh
 ```
 
 **Windows (PowerShell)**
 ```powershell
-irm https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.ps1 | iex
 ```
 
 The script auto-detects your OS and architecture, downloads the correct release asset, installs it (using `apt`/`dnf` on Linux, `/Applications` on macOS, MSI on Windows), and on macOS strips the quarantine attribute so the ad-hoc signed bundle launches without Gatekeeper blocking it.
@@ -221,10 +221,16 @@ keypair provided as repository secrets:
 
 To cut a release:
 
-1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
-2. Tag and push: `git tag v1.2.0 && git push origin v1.2.0`.
+1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, and update `package-lock.json` and `src-tauri/Cargo.lock`.
+2. Commit the changes, then tag that commit with the matching version and push the branch and tag.
 3. CI builds every platform, signs the updater artifacts (`.sig`), generates `latest.json`, and attaches
    everything to the GitHub release. Existing installs pick it up on their next launch.
+
+CI validates that all app and lockfile versions agree and that a release tag matches
+that version before starting the platform builds. Publishing requires exactly one
+signed updater package for each supported platform (Linux x86_64, macOS Apple Silicon,
+and Windows x86_64). Missing packages, empty signatures, and duplicate targets fail
+the release job. Run `node --test scripts/release.test.mjs` to test these checks locally.
 
 > **Keep the private key safe.** If it's lost, you can't sign updates and the pubkey in `tauri.conf.json`
 > must be rotated (which breaks updates for already-installed clients until they reinstall).
