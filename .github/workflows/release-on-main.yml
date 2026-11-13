@@ -1,0 +1,51 @@
+name: Release version merged to main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-on-main
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test release planning and validation
+        run: node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs
+      - name: Validate manifests and plan immutable version tag
+        id: plan
+        run: node scripts/plan-main-release.mjs
+      - name: Create version tag at triggering commit
+        if: steps.plan.outputs.create_tag == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+          RELEASE_SHA: ${{ steps.plan.outputs.sha }}
+        run: >-
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs"
+          --raw-field "ref=refs/tags/$RELEASE_TAG"
+          --raw-field "sha=$RELEASE_SHA" --silent
+      - name: Dispatch signed build and release at version tag
+        if: steps.plan.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+        # GITHUB_TOKEN tag pushes do not trigger push workflows. Explicit
+        # workflow_dispatch does, preserving build.yml's existing tag logic.
+        run: gh workflow run build.yml --ref "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"

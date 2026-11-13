@@ -222,15 +222,22 @@ keypair provided as repository secrets:
 To cut a release:
 
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, and update `package-lock.json` and `src-tauri/Cargo.lock`.
-2. Commit the changes, then tag that commit with the matching version and push the branch and tag.
+2. Merge the version bump and app changes into `main`. The release workflow validates the versions,
+   creates the matching `v<version>` tag at that commit, and explicitly dispatches the signed build workflow at the tag.
 3. CI builds every platform, signs the updater artifacts (`.sig`), generates `latest.json`, and attaches
    everything to the GitHub release. Existing installs pick it up on their next launch.
+
+An unchanged version whose tag points to an earlier commit is skipped; existing tags are never moved.
+To recover a failed build or publish, rerun **Build & Release** or dispatch it with the existing version tag:
+`gh workflow run build.yml --ref v<version>`. Rerunning **Release version merged to main** at the tagged
+commit also dispatches that tag again. Manual `v*` tag pushes continue to work.
 
 CI validates that all app and lockfile versions agree and that a release tag matches
 that version before starting the platform builds. Publishing requires exactly one
 signed updater package for each supported platform (Linux x86_64, macOS Apple Silicon,
 and Windows x86_64). Missing packages, empty signatures, and duplicate targets fail
-the release job. Run `node --test scripts/release.test.mjs` to test these checks locally.
+the release job. Run `node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs`
+to test release validation and planning locally.
 
 > **Keep the private key safe.** If it's lost, you can't sign updates and the pubkey in `tauri.conf.json`
 > must be rotated (which breaks updates for already-installed clients until they reinstall).
