@@ -20,7 +20,7 @@ AirType is a lightweight desktop app that transcribes your voice and inserts the
 
 - **Global hotkeys** — record from any application with a single keypress.
 - **English and Hebrew** — dedicated hotkeys and endpoints configured for each language.
-- **English dictation formatting** — opt-in spoken punctuation, automatic punctuation removal, and lowercase text. See [commands and examples](docs/english-dictation.md).
+- **English dictation formatting** — opt-in spoken punctuation and automatic punctuation/capitalization cleanup. See [commands and examples](docs/english-dictation.md).
 - **Customizable Cloud Endpoints** — dynamically route English to OpenAI or a Custom RunPod endpoint, while strictly routing Hebrew to the `ivrit-ai` model.
 - **Floating indicator** — unobtrusive on-screen dot shows recording state.
 - **System tray** — runs in the background with near-zero resource usage.
@@ -143,6 +143,13 @@ For development with hot reload:
 npm run tauri dev
 ```
 
+For browser-only Settings layout and tooltip checks, start `npm run dev`, then
+run `npm run test:settings-ui` in another terminal with Node.js 20+ and Chrome
+installed. Set `AIRTYPE_CHROME_PATH` if Chrome is not at `/usr/bin/google-chrome`;
+`AIRTYPE_UI_URL` can select another local development-server URL. This checks
+350px/420px windows, full switch size, and tooltip pointer/keyboard/touch behavior.
+It does not test native recording or text insertion.
+
 ## Setup
 
 ### Endpoint Configuration
@@ -168,9 +175,15 @@ npm run tauri dev
 
 Use the **Test** buttons in the main window to verify your API configuration.
 
-Under **Settings → English dictation**, enable any of the three formatting options
+Under **Settings → English dictation**, enable either of the two formatting options
 independently. All default to off, including when loading older settings. See
 [English dictation formatting](docs/english-dictation.md) for commands and limitations.
+When spoken punctuation is enabled, each command writes its mark: saying
+“question mark” three times writes `???`, even with punctuation removal enabled.
+“Dot” means a period; “dot dot dot” writes `...`. Hover or focus the help button
+beside Spoken punctuation for the command guide.
+Removal conservatively cleans sentence capitals: `Hi. How are you?` becomes
+`Hi how are you`, while `Hi, I love you.` becomes `Hi I love you`.
 Endpoint tests apply formatting too; they do not test microphone capture or insertion.
 Punctuation removal cleans email sentence marks and paired wrappers while
 preserving meaningful URL suffixes inside the value.
@@ -269,9 +282,9 @@ keypair provided as repository secrets:
 
 To cut a release:
 
-For **1.5.0**, merge PRs **#2 and #4 before #3**. PR #3 contains the version bump
-and automatic release workflow; merging it first tags a release without the later
-PRs. Resolve review blockers and complete platform smoke tests before that merge.
+Release **1.5.0** included PRs #2, #4, and #3 merged in that order. For future
+releases, merge all intended changes before the version bump that triggers
+publication. Resolve review blockers and complete platform smoke tests first.
 
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, and update `package-lock.json` and `src-tauri/Cargo.lock`.
 2. Merge the version bump and app changes into `main`. The release workflow validates the versions,

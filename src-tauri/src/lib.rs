@@ -395,7 +395,7 @@ async fn stop_recording(state: State<'_, AppState>, app: AppHandle) -> Result<St
 
     let transcription = format_transcription(
         &transcription, &language, settings.english_spoken_punctuation,
-        settings.english_remove_punctuation, settings.english_lowercase,
+        settings.english_remove_punctuation,
     );
     log::info!("{} transcription: {}", language, transcription);
 
@@ -771,7 +771,7 @@ async fn run_transcription_test(language: String, state: State<'_, AppState>) ->
     }?;
     Ok(format_transcription(
         &transcription, &language, settings.english_spoken_punctuation,
-        settings.english_remove_punctuation, settings.english_lowercase,
+        settings.english_remove_punctuation,
     ))
 }
 

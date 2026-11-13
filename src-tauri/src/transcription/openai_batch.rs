@@ -121,6 +121,7 @@ mod tests {
         for command in [
             "comma",
             "period",
+            "dot",
             "full stop",
             "question mark",
             "exclamation mark",

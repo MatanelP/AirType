@@ -2,18 +2,12 @@
 
 /// Whisper context uses spelled-out examples rather than instruction following.
 pub(crate) const SPOKEN_PUNCTUATION_PROMPT: &str =
-    "Hello comma how are you question mark Next sentence period Full stop Exclamation mark \
+    "Hello comma how are you question mark Next sentence period Dot Full stop Exclamation mark \
      Colon semicolon new line new paragraph literal comma literal question mark";
 
-/// Remove automatic punctuation first so explicit commands survive. Lowercase
-/// is a separate, final operation and intentionally changes all English text.
-pub fn format_transcription(
-    text: &str,
-    language: &str,
-    spoken: bool,
-    remove: bool,
-    lowercase: bool,
-) -> String {
+/// Remove automatic punctuation first so explicit commands survive. Preserve
+/// deliberate casing while cleaning clear sentence-start capitalization.
+pub fn format_transcription(text: &str, language: &str, spoken: bool, remove: bool) -> String {
     if language != "en" {
         return text.to_string();
     }
@@ -22,12 +16,7 @@ pub fn format_transcription(
     } else {
         text.to_string()
     };
-    let text = apply_spoken_punctuation(&text, language, spoken);
-    if lowercase {
-        text.to_lowercase()
-    } else {
-        text
-    }
+    apply_spoken_punctuation(&text, language, spoken)
 }
 
 fn punctuation(c: char) -> bool {
@@ -108,16 +97,130 @@ fn opaque_value(core: &str) -> bool {
     url_value(core) || core.contains('@') && core.contains('.')
 }
 
+fn sentence_end(c: char) -> bool {
+    matches!(c, '.' | '?' | '!' | '。' | '？' | '！')
+}
+
+fn abbreviation(token: &str) -> bool {
+    let core = value_core(token);
+    matches!(
+        core.to_ascii_lowercase().as_str(),
+        "mr" | "mrs"
+            | "ms"
+            | "dr"
+            | "prof"
+            | "sr"
+            | "jr"
+            | "st"
+            | "vs"
+            | "etc"
+            | "e.g"
+            | "i.e"
+            | "approx"
+            | "fig"
+            | "inc"
+            | "ltd"
+    ) || core != "I" && core.len() == 1 && core.chars().all(|c| c.is_ascii_alphabetic())
+        || core.contains('.')
+            && core
+                .split('.')
+                .all(|part| part.len() == 1 && part.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+/// Casing cannot identify proper names reliably. Only normalize a small set of
+/// clear sentence starters; preserve I/contractions, acronyms, and unknown words.
+fn clear_sentence_starter(chars: &[char]) -> bool {
+    let word: String = chars
+        .iter()
+        .copied()
+        .take_while(char::is_ascii_alphabetic)
+        .collect();
+    if !word.starts_with(char::is_uppercase)
+        || word.chars().skip(1).any(char::is_uppercase)
+        || chars.get(word.len()).is_some_and(|c| {
+            !boundary(*c)
+                && !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '\'' | '’' | '"' | '“' | '”' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+        })
+    {
+        return false;
+    }
+    matches!(
+        word.to_ascii_lowercase().as_str(),
+        "a" | "an"
+            | "the"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "how"
+            | "what"
+            | "why"
+            | "when"
+            | "where"
+            | "who"
+            | "which"
+            | "you"
+            | "we"
+            | "they"
+            | "he"
+            | "she"
+            | "it"
+            | "there"
+            | "here"
+            | "my"
+            | "our"
+            | "your"
+            | "their"
+            | "his"
+            | "her"
+            | "its"
+            | "and"
+            | "but"
+            | "or"
+            | "so"
+            | "because"
+            | "if"
+            | "then"
+            | "also"
+            | "however"
+            | "therefore"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "do"
+            | "does"
+            | "did"
+            | "have"
+            | "has"
+            | "had"
+            | "can"
+            | "could"
+            | "should"
+            | "would"
+    )
+}
+
 fn remove_auto_punctuation(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
+    let mut clean_initial = false;
+    let mut paragraph_has_text = false;
     for chunk in text.split_inclusive(char::is_whitespace) {
         let token = chunk.trim_end_matches(char::is_whitespace);
         let core = value_core(token);
         // URLs and addresses are opaque values; preserve their internal syntax.
         if opaque_value(core) {
             output.push_str(core);
+            // Value punctuation is ambiguous; it must not drive casing changes.
+            clean_initial = false;
+            paragraph_has_text |= core.chars().any(char::is_alphanumeric);
         } else {
             let chars: Vec<char> = token.chars().collect();
+            let is_abbreviation = abbreviation(token);
             let mut separator = false;
             for (i, &c) in chars.iter().enumerate() {
                 let previous = i.checked_sub(1).and_then(|j| chars.get(j)).copied();
@@ -142,15 +245,32 @@ fn remove_auto_punctuation(text: &str) -> String {
                     {
                         output.push(' ');
                     }
-                    output.push(c);
+                    if clean_initial && c.is_alphanumeric() {
+                        if clear_sentence_starter(&chars[i..]) {
+                            output.extend(c.to_lowercase());
+                        } else {
+                            output.push(c);
+                        }
+                        clean_initial = false;
+                    } else {
+                        output.push(c);
+                    }
+                    paragraph_has_text |= c.is_alphanumeric();
                     separator = false;
                 } else {
                     // Defer spacing until the entire punctuation run is gone.
                     separator = true;
+                    if sentence_end(c) && paragraph_has_text && !(c == '.' && is_abbreviation) {
+                        clean_initial = true;
+                    }
                 }
             }
         }
         output.push_str(&chunk[token.len()..]);
+        if chunk.contains(['\n', '\r']) {
+            clean_initial = false;
+            paragraph_has_text = false;
+        }
     }
     // Clean gaps left by standalone marks, preserving paragraph boundaries.
     output
@@ -161,8 +281,8 @@ fn remove_auto_punctuation(text: &str) -> String {
 }
 
 /// Explicit punctuation replaces adjacent automatic punctuation. Other text is
-/// copied unchanged; consecutive punctuation commands use the last mark, while
-/// explicit line breaks accumulate. Literal escapes are processed only once.
+/// copied unchanged; every explicit command appends its mark or line break.
+/// Literal escapes are processed only once.
 pub fn apply_spoken_punctuation(text: &str, language: &str, enabled: bool) -> String {
     if !enabled || language != "en" {
         return text.to_string();
@@ -174,7 +294,6 @@ pub fn apply_spoken_punctuation(text: &str, language: &str, enabled: bool) -> St
     let mut i = 0;
     let mut space = false;
     let mut capitalize = false;
-    let mut consecutive_mark = false;
 
     while i < words.len() {
         let literal = words[i].text.eq_ignore_ascii_case("literal")
@@ -204,9 +323,6 @@ pub fn apply_spoken_punctuation(text: &str, language: &str, enabled: bool) -> St
         }
         let gap = &text[cursor..start.max(cursor)];
         append_text(&mut output, gap, &mut space, &mut capitalize);
-        if !gap.is_empty() {
-            consecutive_mark = false;
-        }
         if literal {
             let spelling = words[command_index..command_index + count]
                 .iter()
@@ -214,19 +330,13 @@ pub fn apply_spoken_punctuation(text: &str, language: &str, enabled: bool) -> St
                 .collect::<Vec<_>>()
                 .join(" ");
             append_text(&mut output, &spelling, &mut space, &mut capitalize);
-            consecutive_mark = false;
         } else if mark.starts_with('\n') {
             output.push_str(mark);
             space = false;
-            consecutive_mark = false;
         } else {
-            if consecutive_mark {
-                output.pop();
-            }
             output.push_str(mark);
             space = true;
             capitalize = matches!(mark, "." | "?" | "!");
-            consecutive_mark = true;
         }
         cursor = end;
         i = command_index + count;
@@ -304,6 +414,7 @@ fn command(text: &str, words: &[Word<'_>], i: usize) -> Option<(usize, &'static 
     for (name, mark) in [
         ("comma", ","),
         ("period", "."),
+        ("dot", "."),
         ("colon", ":"),
         ("semicolon", ";"),
     ] {
@@ -352,8 +463,8 @@ fn append_text(output: &mut String, text: &str, space: &mut bool, capitalize: &m
             .next()
             .is_some_and(|token| opaque_value(value_core(token)))
         {
-            // Case can be meaningful in an address or URL. Lowercase remains
-            // an explicit separate setting; sentence capitalization skips it.
+            // Case can be meaningful in an address or URL; sentence
+            // capitalization must leave the entire value unchanged.
             output.push_str(text);
             *capitalize = false;
             return;
@@ -382,6 +493,7 @@ mod tests {
         for (command, mark) in [
             ("comma", ","),
             ("period", "."),
+            ("dot", "."),
             ("full stop", "."),
             ("question mark", "?"),
             ("exclamation mark", "!"),
@@ -471,11 +583,90 @@ mod tests {
     }
 
     #[test]
-    fn later_consecutive_punctuation_wins_but_line_breaks_accumulate() {
-        assert_eq!(process("ready period question mark"), "ready?");
+    fn consecutive_spoken_marks_and_line_breaks_accumulate() {
+        assert_eq!(process("ready period question mark"), "ready.?");
         assert_eq!(process("one new line new line two"), "one\n\ntwo");
         assert_eq!(process("one period new paragraph two"), "one.\n\nTwo");
         assert_eq!(process("comma"), ",");
+    }
+
+    #[test]
+    fn repeated_question_marks_are_explicit_even_when_the_model_adds_marks() {
+        for remove in [false, true] {
+            assert_eq!(
+                format_transcription(
+                    "What's going on? question mark, question mark? question mark.",
+                    "en",
+                    true,
+                    remove
+                ),
+                "What's going on???"
+            );
+        }
+    }
+
+    #[test]
+    fn every_spoken_command_is_written_each_time_with_removal_on_or_off() {
+        for (command, mark) in [
+            ("comma", ","),
+            ("period", "."),
+            ("dot", "."),
+            ("full stop", "."),
+            ("question mark", "?"),
+            ("exclamation mark", "!"),
+            ("colon", ":"),
+            ("semicolon", ";"),
+            ("new line", "\n"),
+            ("new paragraph", "\n\n"),
+        ] {
+            for remove in [false, true] {
+                let next = if matches!(mark, "." | "?" | "!") {
+                    " Next"
+                } else if mark.starts_with('\n') {
+                    "next"
+                } else {
+                    " next"
+                };
+                assert_eq!(
+                    format_transcription(
+                        &format!("hello {command} {command} {command} next"),
+                        "en",
+                        true,
+                        remove
+                    ),
+                    format!("hello{}{}", mark.repeat(3), next),
+                    "command={command} remove={remove}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_marks_literal_escapes_and_url_suffixes_keep_their_own_counts() {
+        assert_eq!(
+            process("Ready. question mark, exclamation mark. question mark! next"),
+            "Ready?!? Next"
+        );
+        assert_eq!(process("one comma comma period two"), "one,,. Two");
+        assert_eq!(
+            process("Say literal question mark question mark question mark"),
+            "Say question mark??"
+        );
+        for remove in [false, true] {
+            assert_eq!(
+                format_transcription(
+                    "Visit https://example.com/? question mark question mark",
+                    "en",
+                    true,
+                    remove
+                ),
+                "Visit https://example.com/???"
+            );
+            assert_eq!(
+                format_transcription("hello question mark question mark NEXT", "en", true, remove),
+                "hello?? NEXT"
+            );
+        }
     }
 
     #[test]
@@ -528,7 +719,7 @@ mod tests {
             ("\nHello!\n\nWorld.\n", "\nHello\n\nWorld\n"),
         ] {
             assert_eq!(
-                format_transcription(text, "en", false, true, false),
+                format_transcription(text, "en", false, true),
                 expected,
                 "{text}"
             );
@@ -546,10 +737,10 @@ mod tests {
             "well-known",
             "snake_case",
         ] {
-            assert_eq!(format_transcription(text, "en", false, true, false), text);
+            assert_eq!(format_transcription(text, "en", false, true), text);
         }
         assert_eq!(
-            format_transcription("It's 3.14, or 1,000.25!", "en", false, true, false),
+            format_transcription("It's 3.14, or 1,000.25!", "en", false, true),
             "It's 3.14 or 1,000.25"
         );
     }
@@ -562,37 +753,27 @@ mod tests {
             "www.example.com/path",
             "user.name+tag@example.com",
         ] {
-            assert_eq!(format_transcription(text, "en", false, true, false), text);
+            assert_eq!(format_transcription(text, "en", false, true), text);
         }
         assert_eq!(
-            format_transcription(
-                "Visit https://example.com/test, please.",
-                "en",
-                false,
-                true,
-                false
-            ),
+            format_transcription("Visit https://example.com/test, please.", "en", false, true),
             "Visit https://example.com/test please"
         );
     }
 
     #[test]
-    fn all_eight_option_combinations_have_explicit_expected_outputs() {
+    fn all_four_option_combinations_have_explicit_expected_outputs() {
         let text = "Hello, comma World! period Next.";
-        for (spoken, remove, lowercase, expected) in [
-            (false, false, false, "Hello, comma World! period Next."),
-            (false, false, true, "hello, comma world! period next."),
-            (false, true, false, "Hello comma World period Next"),
-            (false, true, true, "hello comma world period next"),
-            (true, false, false, "Hello, World. Next."),
-            (true, false, true, "hello, world. next."),
-            (true, true, false, "Hello, World. Next"),
-            (true, true, true, "hello, world. next"),
+        for (spoken, remove, expected) in [
+            (false, false, "Hello, comma World! period Next."),
+            (false, true, "Hello comma World period Next"),
+            (true, false, "Hello, World. Next."),
+            (true, true, "Hello, World. Next"),
         ] {
             assert_eq!(
-                format_transcription(text, "en", spoken, remove, lowercase),
+                format_transcription(text, "en", spoken, remove),
                 expected,
-                "spoken={spoken} remove={remove} lowercase={lowercase}"
+                "spoken={spoken} remove={remove}"
             );
         }
     }
@@ -612,23 +793,8 @@ mod tests {
             ),
             ("new paragraph", "\n\n"),
         ] {
-            assert_eq!(
-                format_transcription(text, "en", true, true, false),
-                expected
-            );
+            assert_eq!(format_transcription(text, "en", true, true), expected);
         }
-    }
-
-    #[test]
-    fn lowercase_is_independent_and_unicode_aware() {
-        assert_eq!(
-            format_transcription("HELLO, Über!", "en", false, false, true),
-            "hello, über!"
-        );
-        assert_eq!(
-            format_transcription("HELLO period NEXT", "en", true, false, true),
-            "hello. next"
-        );
     }
 
     #[test]
@@ -639,10 +805,7 @@ mod tests {
             "Hello?!World",
             "Hello—…World",
         ] {
-            assert_eq!(
-                format_transcription(text, "en", false, true, false),
-                "Hello World"
-            );
+            assert_eq!(format_transcription(text, "en", false, true), "Hello World");
         }
     }
 
@@ -655,11 +818,11 @@ mod tests {
             "https://example.com/has-comma?q=comma+period",
             "http://[::1]/path",
         ] {
-            assert_eq!(format_transcription(text, "en", false, true, false), text);
-            assert_eq!(format_transcription(text, "en", true, true, false), text);
+            assert_eq!(format_transcription(text, "en", false, true), text);
+            assert_eq!(format_transcription(text, "en", true, true), text);
         }
         assert_eq!(
-            format_transcription("(https://example.com/a_(b)).", "en", false, true, false),
+            format_transcription("(https://example.com/a_(b)).", "en", false, true),
             "https://example.com/a_(b)"
         );
     }
@@ -671,10 +834,7 @@ mod tests {
             ("[+3.14]", "+3.14"),
             ("-1,000.25!", "-1,000.25"),
         ] {
-            assert_eq!(
-                format_transcription(text, "en", false, true, false),
-                expected
-            );
+            assert_eq!(format_transcription(text, "en", false, true), expected);
         }
     }
 
@@ -689,6 +849,7 @@ mod tests {
         for (command, mark) in [
             ("comma", ","),
             ("period", "."),
+            ("dot", "."),
             ("full stop", "."),
             ("question mark", "?"),
             ("exclamation mark", "!"),
@@ -699,7 +860,7 @@ mod tests {
         ] {
             let input = format!("Hello, {command}.");
             assert_eq!(
-                format_transcription(&input, "en", true, true, false),
+                format_transcription(&input, "en", true, true),
                 format!("Hello{mark}")
             );
         }
@@ -710,13 +871,8 @@ mod tests {
         for language in ["he", "fr", ""] {
             for spoken in [false, true] {
                 for remove in [false, true] {
-                    for lowercase in [false, true] {
-                        let text = "שלום, HELLO! comma\n";
-                        assert_eq!(
-                            format_transcription(text, language, spoken, remove, lowercase),
-                            text
-                        );
-                    }
+                    let text = "שלום, HELLO! comma\n";
+                    assert_eq!(format_transcription(text, language, spoken, remove), text);
                 }
             }
         }
@@ -746,8 +902,7 @@ mod tests {
                             &format!("Visit {url} {command} next"),
                             "en",
                             true,
-                            remove,
-                            false
+                            remove
                         ),
                         format!(
                             "Visit {url}{mark}{}",
@@ -817,7 +972,7 @@ mod tests {
                 ),
             ] {
                 assert_eq!(
-                    format_transcription(input, "en", spoken, true, false),
+                    format_transcription(input, "en", spoken, true),
                     expected,
                     "spoken={spoken}: {input}"
                 );
@@ -851,7 +1006,7 @@ mod tests {
                 ),
             ] {
                 assert_eq!(
-                    format_transcription(input, "en", spoken, true, false),
+                    format_transcription(input, "en", spoken, true),
                     expected,
                     "spoken={spoken}: {input}"
                 );
@@ -874,14 +1029,194 @@ mod tests {
             "Visit \"https://example.com/path;\", next"
         );
         assert_eq!(
-            format_transcription(
-                "Contact (user@example.com); comma next",
-                "en",
-                true,
-                true,
-                false
-            ),
+            format_transcription("Contact (user@example.com); comma next", "en", true, true),
             "Contact user@example.com, next"
         );
+    }
+
+    #[test]
+    fn dot_alias_preserves_repetition_and_literal_escape() {
+        assert_eq!(process("hello dot dot dot"), "hello...");
+        assert_eq!(process("hello DOT, dot! dot. next"), "hello... Next");
+        assert_eq!(process("Say literal dot dot dot"), "Say dot..");
+        for remove in [false, true] {
+            assert_eq!(
+                format_transcription("hello dot dot dot", "en", true, remove),
+                "hello..."
+            );
+            assert_eq!(
+                format_transcription("Say literal dot.", "en", true, remove),
+                if remove { "Say dot" } else { "Say dot." }
+            );
+        }
+        assert_eq!(
+            format_transcription("dot dot dot", "en", false, false),
+            "dot dot dot"
+        );
+    }
+
+    #[test]
+    fn removal_lowercases_clear_starters_only_after_removed_sentence_endings() {
+        for (text, expected) in [
+            ("Hi. How are you?", "Hi how are you"),
+            ("Hi! The cat sleeps.", "Hi the cat sleeps"),
+            ("Hi? You are welcome.", "Hi you are welcome"),
+            ("Hi. This is fine.", "Hi this is fine"),
+            ("Hi. It works.", "Hi it works"),
+            ("Hi. We can go.", "Hi we can go"),
+            ("Hi, How are you?", "Hi How are you"),
+            ("Hi; The cat sleeps.", "Hi The cat sleeps"),
+            ("Hi: You are welcome.", "Hi You are welcome"),
+            ("How are you? The cat sleeps.", "How are you the cat sleeps"),
+            ("Hi, I love you.", "Hi I love you"),
+        ] {
+            assert_eq!(
+                format_transcription(text, "en", false, true),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn removal_preserves_i_contractions_names_acronyms_and_ambiguous_capitals() {
+        for word in [
+            "I", "I'm", "I'll", "I've", "I'd", "I’m", "I’ll", "I’ve", "I’d", "Alice", "May",
+            "Will", "June", "NASA", "HTTP", "NEXT", "Über",
+        ] {
+            let text = format!("Hi. {word} stays.");
+            assert_eq!(
+                format_transcription(&text, "en", false, true),
+                format!("Hi {word} stays"),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn removal_does_not_infer_sentence_case_from_numbers_abbreviations_or_values() {
+        for (text, expected) in [
+            ("Use 1.5 The result stays.", "Use 1.5 The result stays"),
+            ("Ask Dr. How it works.", "Ask Dr How it works"),
+            (
+                "Visit the U.S.A. The trip starts.",
+                "Visit the U S A The trip starts",
+            ),
+            (
+                "Visit https://Example.com/How? The cat sleeps.",
+                "Visit https://Example.com/How? The cat sleeps",
+            ),
+            (
+                "Visit https://Example.com/?q=The; You are welcome.",
+                "Visit https://Example.com/?q=The; You are welcome",
+            ),
+            (
+                "Contact How@example.com. The cat sleeps.",
+                "Contact How@example.com The cat sleeps",
+            ),
+        ] {
+            assert_eq!(
+                format_transcription(text, "en", false, true),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn removal_preserves_paragraph_openers_and_cleans_wrapped_sentence_starters() {
+        for (text, expected) in [
+            ("Hi. \"How are you?\"", "Hi how are you"),
+            ("Hi. (The cat sleeps.)", "Hi the cat sleeps"),
+            ("\"How are you?\"", "How are you"),
+            ("Hi.\nHow are you?", "Hi\nHow are you"),
+            ("Hi.\n\nThe cat sleeps.", "Hi\n\nThe cat sleeps"),
+        ] {
+            assert_eq!(
+                format_transcription(text, "en", false, true),
+                expected,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn spoken_sentence_marks_restore_sentence_caps_after_automatic_cleanup() {
+        for alias in [
+            "period",
+            "full stop",
+            "dot",
+            "question mark",
+            "exclamation mark",
+        ] {
+            let mark = match alias {
+                "question mark" => "?",
+                "exclamation mark" => "!",
+                _ => ".",
+            };
+            assert_eq!(
+                format_transcription(&format!("Hi. {alias} How are you?"), "en", true, true),
+                format!("Hi{mark} How are you"),
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            format_transcription("Hi. comma How are you?", "en", true, true),
+            "Hi, How are you"
+        );
+        assert_eq!(
+            format_transcription("Hi. how are you period the cat sleeps.", "en", true, true),
+            "Hi how are you. The cat sleeps"
+        );
+    }
+
+    #[test]
+    fn sentence_case_cleanup_requires_english_removal_and_leaves_disabled_text_exact() {
+        let text = "  Hi. How are you? I’m here!\n";
+        assert_eq!(format_transcription(text, "en", false, false), text);
+        assert_eq!(format_transcription(text, "en", true, false), text);
+        for language in ["he", "fr", ""] {
+            for spoken in [false, true] {
+                assert_eq!(format_transcription(text, language, spoken, true), text);
+            }
+        }
+    }
+
+    #[test]
+    fn initials_are_ambiguous_but_question_and_exclamation_endings_are_explicit_boundaries() {
+        assert_eq!(
+            format_transcription("Ask J. The name stays.", "en", false, true),
+            "Ask J The name stays"
+        );
+        assert_eq!(
+            format_transcription("I. How are you?", "en", false, true),
+            "I how are you"
+        );
+        for text in ["Ask Dr! How are you?", "Visit the U.S.A.? How are you?"] {
+            assert!(
+                format_transcription(text, "en", false, true).ends_with("how are you"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            format_transcription(
+                "hello my name it dave question mark how are you",
+                "en",
+                true,
+                true
+            ),
+            "hello my name it dave? How are you"
+        );
+    }
+
+    #[test]
+    fn sentence_starters_must_be_complete_words_not_unicode_name_prefixes() {
+        for name in ["The\u{301}a", "Howé", "The_2", "How-to"] {
+            let input = format!("Hi. {name} stays.");
+            assert_eq!(
+                format_transcription(&input, "en", false, true),
+                format!("Hi {name} stays")
+            );
+        }
     }
 }

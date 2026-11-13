@@ -16,9 +16,16 @@ editor separately. RunPod queueing shows warming before processing; OpenAI uses
 processing directly. Cold-start latency is provider dependent.
 
 English formatting runs after recognition and before preview, history, copying,
-and insertion. See [English dictation](docs/english-dictation.md). Turn all three
+and insertion. See [English dictation](docs/english-dictation.md). Turn both
 options off to compare provider text with formatted output. Missing command words
 cannot be reconstructed by formatting.
+Every recognized spoken command must write its own mark. Repeated or mixed
+commands accumulate; only adjacent automatic punctuation is removed. Test
+“question mark question mark question mark” → `???` with removal on and off.
+“Dot” is a period alias. Removal should clean `Hi. How` to `Hi how`, but retain
+`I`, its contractions, acronyms, names/ambiguous capitals, paragraph openers, and
+URL/email spelling. Commas, abbreviations, and decimal points do not trigger case
+cleanup. The obsolete standalone lowercase setting is ignored on legacy load.
 When checking value formatting, distinguish URL suffixes from email sentence
 marks and punctuation outside paired wrappers. Removal should turn
 `(user@example.com);` into `user@example.com` and `(https://example.com/?);`

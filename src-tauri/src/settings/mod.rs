@@ -74,12 +74,9 @@ pub struct Settings {
     #[serde(default)]
     pub english_spoken_punctuation: bool,
 
-    /// Remove automatic punctuation from English dictation.
+    /// Remove automatic punctuation and sentence capitalization from English dictation.
     #[serde(default)]
     pub english_remove_punctuation: bool,
-    /// Convert English dictation to lowercase.
-    #[serde(default)]
-    pub english_lowercase: bool,
     
     /// Optional separate RunPod Endpoint ID for English (when english_endpoint_type is CustomRunPod)
     #[serde(default)]
@@ -149,7 +146,6 @@ impl Default for Settings {
             english_endpoint_type: EnglishEndpointType::default(),
             english_spoken_punctuation: false,
             english_remove_punctuation: false,
-            english_lowercase: false,
             english_custom_runpod_endpoint_id: None,
             english_custom_runpod_api_key: None,
             english_openai_api_key: None,
@@ -224,8 +220,8 @@ mod tests {
     #[test]
     fn english_text_options_default_off_for_new_and_legacy_settings() {
         let settings = Settings::default();
+        assert!(!settings.english_spoken_punctuation);
         assert!(!settings.english_remove_punctuation);
-        assert!(!settings.english_lowercase);
 
         let mut legacy = serde_json::to_value(&settings).unwrap();
         let fields = legacy.as_object_mut().unwrap();
@@ -235,27 +231,47 @@ mod tests {
         let loaded: Settings = serde_json::from_value(legacy).unwrap();
         assert!(!loaded.english_spoken_punctuation);
         assert!(!loaded.english_remove_punctuation);
-        assert!(!loaded.english_lowercase);
+        assert!(serde_json::to_value(&loaded).unwrap().get("english_lowercase").is_none());
     }
 
     #[test]
     fn english_text_options_roundtrip_independently() {
-        for bits in 0..8 {
+        for bits in 0..4 {
             let spoken = bits & 1 != 0;
             let remove_punctuation = bits & 2 != 0;
-            let lowercase = bits & 4 != 0;
             let settings = Settings {
                 english_spoken_punctuation: spoken,
                 english_remove_punctuation: remove_punctuation,
-                english_lowercase: lowercase,
                 ..Settings::default()
             };
             let json = serde_json::to_string(&settings).unwrap();
             let loaded: Settings = serde_json::from_str(&json).unwrap();
             assert_eq!(loaded.english_remove_punctuation, remove_punctuation);
-            assert_eq!(loaded.english_lowercase, lowercase);
             assert_eq!(loaded.english_spoken_punctuation, spoken);
+            assert!(serde_json::to_value(&loaded).unwrap().get("english_lowercase").is_none());
         }
+    }
+
+    #[test]
+    fn legacy_lowercase_option_is_ignored_without_losing_other_settings() {
+        let mut legacy = serde_json::to_value(Settings {
+            english_spoken_punctuation: true,
+            english_remove_punctuation: true,
+            english_openai_api_key: Some("test-only-openai-credential".to_string()),
+            runpod_api_key: Some("test-only-runpod-credential".to_string()),
+            english_custom_runpod_api_key: Some("test-only-custom-credential".to_string()),
+            ..Settings::default()
+        }).unwrap();
+        legacy["english_lowercase"] = serde_json::Value::Bool(true);
+
+        let loaded: Settings = serde_json::from_value(legacy).unwrap();
+
+        assert!(loaded.english_spoken_punctuation);
+        assert!(loaded.english_remove_punctuation);
+        assert_eq!(loaded.english_openai_api_key.as_deref(), Some("test-only-openai-credential"));
+        assert_eq!(loaded.runpod_api_key.as_deref(), Some("test-only-runpod-credential"));
+        assert_eq!(loaded.english_custom_runpod_api_key.as_deref(), Some("test-only-custom-credential"));
+        assert!(serde_json::to_value(&loaded).unwrap().get("english_lowercase").is_none());
     }
 }
 
