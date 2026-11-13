@@ -42,7 +42,7 @@ npm run check
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml --lib --locked -j 2
 cargo build --manifest-path src-tauri/Cargo.toml --bin airtype --locked -j 2
-node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs
+node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs scripts/publish-platform-release.test.mjs scripts/installers.test.mjs
 git diff --check
 ```
 
@@ -63,6 +63,21 @@ before a version bump. A version bump merged into `main` creates an
 immutable version tag and dispatches Build & Release. Do not publish as a review
 test. Keep all five manifest/lockfile versions in agreement. README.md explains
 recovery at an existing tag; never move a published tag.
+
+Each successful platform build publishes to the same versioned release immediately.
+Keep one repository-wide publisher lock with `queue: max`, never a per-target/tag
+lock or nested caller lock. Upload the entire required package set before its
+signature and manifest; reconstruct metadata from all complete same-tag signed
+sets. Packages are immutable by policy: compare SHA256 and reject different bytes.
+Never promote an older version over a newer latest. Progressive releases require
+maintainer-verified mutable-release policy; reject immutable/unknown metadata,
+including after first publication, without weakening protections. Historical
+tag workflows lack these guards and must not be used as progressive recovery.
+Retry publisher jobs with original run/commit artifacts; do not publish review tests.
+Unpinned installers must tolerate partial releases by selecting the highest
+compatible stable version no newer than global latest (bounded 100-release scan).
+Keep explicit pins exact and fail on API/metadata/download errors. Do not evaluate
+remote metadata or require a new POSIX runtime beyond curl and standard tools.
 
 Update README.md, docs/english-dictation.md, DEBUGGING_RECOMMENDATIONS.md, TODOs.md,
 and this file when behavior changes. Separate verified results from unperformed

@@ -58,3 +58,24 @@ On Linux test under X11; Wayland can restrict global input and text insertion.
 See [README](README.md) for setup/releases, [AGENTS.md](AGENTS.md) for commands,
 and [TODOs.md](TODOs.md) for unresolved checks. Unit tests do not replace live
 provider, desktop permission, or signed-update testing.
+
+## Progressive releases
+
+Builds run in parallel; successful platform publishers join one shared versioned
+release under a repository-wide queued lock. A public release with one platform
+is available, but is not complete. Inspect each build and publisher result.
+Until its target is published, an older client can report a missing-target check
+error. Do not point that target at an older binary under the new version.
+
+For a missing `latest.json`, retry the failed publisher job using its original
+run/commit artifact; metadata is reconstructed from all completed signed sets.
+Asset replacement can briefly return 404. Package/signature digest conflicts
+require a new version, not clobbering files. If a release is immutable (including
+after the first draft is published), stop; do not change protection settings.
+Never rerun historical all-at-once tag workflows as progressive recovery or move
+an existing tag. See README for the supported job-level recovery path.
+Unpinned quick installers fall back only when the latest release lacks their
+package, selecting a compatible stable release within the first 100 entries.
+Explicit version pins and download/API errors never silently select an older
+version. The Windows resolver has a mocked PowerShell test script; execute it on
+a machine with PowerShell rather than treating a skipped test as a pass.

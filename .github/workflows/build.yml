@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   validate-release:
@@ -18,7 +19,7 @@ jobs:
         with:
           node-version: 20
       - name: Test release validation
-        run: node --test scripts/release.test.mjs
+        run: node --test scripts/release.test.mjs scripts/publish-platform-release.test.mjs scripts/installers.test.mjs
       - name: Validate app versions and release tag
         run: node scripts/check-release-version.mjs
 
@@ -74,7 +75,7 @@ jobs:
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AirType-linux-x86_64
+          name: AirType-linux-x86_64-${{ github.sha }}-${{ github.run_id }}
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/rpm/*.rpm
@@ -126,7 +127,7 @@ jobs:
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AirType-macos-aarch64
+          name: AirType-macos-aarch64-${{ github.sha }}-${{ github.run_id }}
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.app.tar.gz
@@ -138,6 +139,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Test Windows installer resolution with mocked API
+        shell: pwsh
+        run: ./scripts/installers-windows.test.ps1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -165,30 +170,33 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AirType-windows-x86_64
+          name: AirType-windows-x86_64-${{ github.sha }}-${{ github.run_id }}
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
 
-  release:
+  publish-linux:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux, build-macos, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+    needs: build-linux
+    uses: ./.github/workflows/publish-platform.yml
+    with:
+      platform: linux-x86_64
+      artifact-name: AirType-linux-x86_64-${{ github.sha }}-${{ github.run_id }}
 
-      - name: Generate updater manifest (latest.json)
-        run: bash scripts/generate-updater-manifest.sh artifacts
+  publish-macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-macos
+    uses: ./.github/workflows/publish-platform.yml
+    with:
+      platform: darwin-aarch64
+      artifact-name: AirType-macos-aarch64-${{ github.sha }}-${{ github.run_id }}
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          generate_release_notes: true
-          files: artifacts/**/*
+  publish-windows:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    uses: ./.github/workflows/publish-platform.yml
+    with:
+      platform: windows-x86_64
+      artifact-name: AirType-windows-x86_64-${{ github.sha }}-${{ github.run_id }}

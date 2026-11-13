@@ -25,6 +25,13 @@ remain separate. The 1.5.1 follow-up preserves every spoken punctuation command.
   tests alone do not establish it.
 - Merge all intended changes before a version bump; merging that bump to `main`
   starts the signed release path.
+- On the next authorized release, verify that the first completed platform can
+  update before others finish, all targets ultimately join the same release,
+  and a failed publisher recovers using its original artifact. Local fault tests
+  cover orchestration; no review release should be published to test it.
+- Before progressive publication, verify repository/owner release immutability
+  is disabled without changing protections. Confirm no unknown/immutable release
+  is promoted. Verify quick installers during a partial rollout on each OS.
 
 ## Implemented features to retain
 
