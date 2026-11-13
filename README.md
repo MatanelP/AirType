@@ -148,10 +148,12 @@ independently. All default to off, including when loading older settings. See
 [English dictation formatting](docs/english-dictation.md) for commands and limitations.
 Endpoint tests apply formatting too; they do not test microphone capture or insertion.
 
-Hebrew filler filtering suppresses standalone `תודה` / `תודה רבה` only when the
-whole recording's RMS amplitude is below 0.02. Discarded results do not replace
-the last transcription, enter history, or insert text. This heuristic can also
-suppress quiet speech or a short phrase in a long recording.
+Hebrew filler filtering suppresses standalone `תודה` / `תודה רבה` only when a
+nonempty capture is entirely finite digital silence, checked in short windows.
+Any nonzero signal, however quiet or brief, is retained; empty or invalid capture
+data is treated as uncertain and retained too. Discarded results do not replace
+the last transcription, enter history, or insert text. Background noise can keep
+hallucinated filler; preserving possible speech takes priority.
 
 History stores up to 100 transcriptions locally, with copy/delete controls.
 Dismissing the last-transcription card does not clear history. Settings includes

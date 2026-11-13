@@ -5,12 +5,6 @@ features does not mean that the three PRs have been merged or released.
 
 ## Before merging the release PR
 
-- Resolve review findings: quiet/short Hebrew speech suppression and spoken
-  punctuation consuming URL syntax adjacent to commands.
-- Fix or replace `settings::store::tests::test_sensitive_settings_not_serialized`.
-  It tests direct IPC serialization of Settings; disk saving uses a separate clone
-  with keys cleared. This failure predates these PRs. Preserve API-key delivery to
-  the Settings UI while testing actual disk persistence.
 - Run frontend checks/build, Rust tests/build, and release tests on the combined
   changes. Use Node.js 20+ for the supported setup path.
 - Verify real recordings on shared RunPod, custom RunPod, and OpenAI, including
@@ -32,3 +26,10 @@ support, local history, and dismissible last-transcription preview are implement
 English formatting defaults off for legacy settings. The setup helper checks
 prerequisites and installs locked npm dependencies without installing system
 packages or downloading models.
+
+Review regressions are covered by tests: Hebrew filler suppression now keeps
+quiet/brief speech and unknown capture data, discarding only nonempty digital
+silence. Spoken commands preserve preceding URL syntax with removal on or off.
+Settings tests cover the actual disk-write boundary, redacted secret fields,
+unchanged IPC values, file permissions, and write failures without touching the
+host keyring.

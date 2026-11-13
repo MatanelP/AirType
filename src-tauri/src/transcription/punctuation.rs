@@ -48,8 +48,7 @@ fn value_core(token: &str) -> &str {
             '>' => true,
             _ => false,
         };
-        if unbalanced || matches!(last, '.' | ',' | '!' | ';' | '"' | '\'' | '”' | '’' | '…')
-        {
+        if unbalanced || matches!(last, '.' | ',' | '"' | '\'' | '”' | '’' | '…') {
             core = &core[..core.len() - last.len_utf8()];
         } else {
             break;
@@ -58,18 +57,21 @@ fn value_core(token: &str) -> &str {
     core
 }
 
+fn opaque_value(core: &str) -> bool {
+    let lower = core.to_ascii_lowercase();
+    lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("www.")
+        || core.contains('@') && core.contains('.')
+}
+
 fn remove_auto_punctuation(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     for chunk in text.split_inclusive(char::is_whitespace) {
         let token = chunk.trim_end_matches(char::is_whitespace);
         let core = value_core(token);
-        let lower_core = core.to_ascii_lowercase();
         // URLs and addresses are opaque values; preserve their internal syntax.
-        if lower_core.starts_with("https://")
-            || lower_core.starts_with("http://")
-            || lower_core.starts_with("www.")
-            || core.contains('@') && core.contains('.')
-        {
+        if opaque_value(core) {
             output.push_str(core);
         } else {
             let chars: Vec<char> = token.chars().collect();
@@ -147,6 +149,14 @@ pub fn apply_spoken_punctuation(text: &str, language: &str, enabled: bool) -> St
             // Only horizontal whitespace and sentence punctuation belong to
             // this boundary. Quotes, brackets and existing line breaks survive.
             start -= text[..start].len() - text[..start].trim_end_matches(boundary).len();
+            // A URL may legitimately end in any of these boundary characters.
+            // Remove marks outside the preceding value, never inside it.
+            if let Some(protected_end) = i
+                .checked_sub(1)
+                .and_then(|previous| words[previous].protected_end)
+            {
+                start = start.max(protected_end);
+            }
             end += text[end..].len() - text[end..].trim_start_matches(boundary).len();
         }
         let gap = &text[cursor..start.max(cursor)];
@@ -206,6 +216,7 @@ struct Word<'a> {
     text: &'a str,
     start: usize,
     end: usize,
+    protected_end: Option<usize>,
 }
 
 fn words(text: &str) -> Vec<Word<'_>> {
@@ -214,6 +225,8 @@ fn words(text: &str) -> Vec<Word<'_>> {
         .filter_map(|chunk| {
             let start = offset;
             offset += chunk.len();
+            let token = chunk.trim_end_matches(char::is_whitespace);
+            let protected_end = opaque_value(value_core(token)).then_some(start + token.len());
             let core = chunk.trim_matches(|c: char| {
                 c.is_whitespace()
                     || boundary(c)
@@ -227,6 +240,7 @@ fn words(text: &str) -> Vec<Word<'_>> {
                 text: core,
                 start,
                 end: start + core.len(),
+                protected_end,
             })
         })
         .collect()
@@ -280,6 +294,17 @@ fn append_text(output: &mut String, text: &str, space: &mut bool, capitalize: &m
     }
     *space = false;
     if *capitalize {
+        if text
+            .split_whitespace()
+            .next()
+            .is_some_and(|token| opaque_value(value_core(token)))
+        {
+            // Case can be meaningful in an address or URL. Lowercase remains
+            // an explicit separate setting; sentence capitalization skips it.
+            output.push_str(text);
+            *capitalize = false;
+            return;
+        }
         if let Some((index, letter)) = text.char_indices().find(|(_, c)| c.is_alphabetic()) {
             output.push_str(&text[..index]);
             output.extend(letter.to_uppercase());
@@ -642,5 +667,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn spoken_commands_preserve_meaningful_url_endings_with_removal_on_or_off() {
+        for url in [
+            "https://example.com/?",
+            "https://example.com/path;",
+            "https://example.com/!",
+            "https://example.com/path:",
+            "https://example.com/?q=1;",
+            "HTTPS://Example.com/?",
+            "www.example.com/path;",
+            "https://example.com/a_(b)?",
+        ] {
+            for remove in [false, true] {
+                for (command, mark) in [
+                    ("comma", ","),
+                    ("period", "."),
+                    ("question mark", "?"),
+                    ("new line", "\n"),
+                ] {
+                    assert_eq!(
+                        format_transcription(
+                            &format!("Visit {url} {command} next"),
+                            "en",
+                            true,
+                            remove,
+                            false
+                        ),
+                        format!(
+                            "Visit {url}{mark}{}",
+                            if matches!(mark, "." | "?") {
+                                " Next"
+                            } else if mark == "\n" {
+                                "next"
+                            } else {
+                                " next"
+                            }
+                        ),
+                        "url={url} command={command} remove={remove}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spoken_commands_keep_opaque_values_and_only_remove_external_marks() {
+        assert_eq!(
+            process("Visit https://example.com/?. comma next"),
+            "Visit https://example.com/?., next"
+        );
+        assert_eq!(
+            process("Visit https://example.com/? , comma next"),
+            "Visit https://example.com/?, next"
+        );
+        assert_eq!(
+            process("Visit https://example.com/? literal comma"),
+            "Visit https://example.com/? comma"
+        );
+        assert_eq!(
+            process("Visit (https://example.com/?) comma next"),
+            "Visit (https://example.com/?), next"
+        );
+        assert_eq!(
+            process("hello period user@example.com"),
+            "hello. user@example.com"
+        );
     }
 }

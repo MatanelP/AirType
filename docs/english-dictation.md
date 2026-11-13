@@ -27,13 +27,15 @@ consecutive line-break commands accumulate. Leading/trailing spoken line breaks
 are preserved. Removal cleans spacing left by deleted marks and preserves
 paragraph boundaries.
 
-Removal treats trailing sentence marks around URLs as punctuation; unusual URLs
-that intentionally end with those marks are ambiguous in a plain transcript.
+Spoken commands protect the preceding URL or email token, including meaningful
+trailing syntax such as `?`, `;`, `!`, and `:`. For example,
+`https://example.com/? comma next` becomes `https://example.com/?, next` with
+automatic-punctuation removal either on or off. Sentence capitalization also
+preserves URL and email spelling; the explicit lowercase setting still applies.
 
-Known review issue: spoken commands can currently consume a URL's trailing
-punctuation even with removal disabled (for example, the `?` in
-`https://example.com/? comma next`). Review URL output before using it; the
-release checklist tracks this for correction.
+Removal treats attached trailing periods, commas, and ellipses as sentence marks.
+Those characters remain ambiguous when they are intentionally part of a URL.
+With removal off, spoken commands preserve the complete preceding URL token.
 
 The same final text is used for the preview, history, copying, and insertion.
 Formatting happens locally after transcription; it adds no model call. Provider

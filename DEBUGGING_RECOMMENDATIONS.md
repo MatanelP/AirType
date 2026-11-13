@@ -20,10 +20,12 @@ and insertion. See [English dictation](docs/english-dictation.md). Turn all thre
 options off to compare provider text with formatted output. Missing command words
 cannot be reconstructed by formatting.
 
-Hebrew filler filtering checks standalone `תודה` / `תודה רבה` and whole-recording
-RMS below 0.02. It skips injection, history, and last-transcription replacement.
-The threshold can also suppress quiet speech or a short phrase surrounded by
-silence; test those cases when investigating missing Hebrew text.
+Hebrew filler filtering checks standalone `תודה` / `תודה רבה` against nonempty
+capture data in 10 ms windows. A result is discarded only if every captured sample
+is finite digital zero. Any nonzero signal, empty input, or nonfinite sample keeps
+the transcript. Background noise can keep hallucinations too; no amplitude cutoff
+is used to infer that quiet speech was absent. Digital-silence suppression skips
+injection, history, and last-transcription replacement.
 
 ## Logs and hotkeys
 

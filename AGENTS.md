@@ -10,6 +10,9 @@
 - English formatting runs once before events, history, and insertion. Keep new
   settings backward compatible with serde defaults; all three flags default off.
   Preserve OS-keychain persistence, the updater endpoint, and signing public key.
+- Keep URL/email tokens opaque at spoken-command boundaries. Hebrew filler
+  suppression requires nonempty finite digital silence in every capture window;
+  retain any nonzero or uncertain signal rather than applying an RMS cutoff.
 - Vendored rdev 0.5.3 skips macOS text-input-source lookup on the listener thread.
   Preserve the patch and consult its README before updating it.
 
@@ -30,9 +33,10 @@ node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs
 git diff --check
 ```
 
-The existing sensitive-settings serialization assertion fails; do not report the
-entire Rust suite as passing or remove IPC fields to silence it. See TODOs.md.
-Live audio, insertion, platform permissions, and updates need separate smoke tests.
+Settings IPC must retain API-key fields needed by the UI. Disk persistence uses
+a redacted clone; test the actual disk-write boundary without accessing the host
+keyring. Live audio, insertion, platform permissions, and updates need separate
+smoke tests; see TODOs.md.
 
 ## Releases and documentation
 
