@@ -30,6 +30,11 @@ paragraph boundaries.
 Removal treats trailing sentence marks around URLs as punctuation; unusual URLs
 that intentionally end with those marks are ambiguous in a plain transcript.
 
+Known review issue: spoken commands can currently consume a URL's trailing
+punctuation even with removal disabled (for example, the `?` in
+`https://example.com/? comma next`). Review URL output before using it; the
+release checklist tracks this for correction.
+
 The same final text is used for the preview, history, copying, and insertion.
 Formatting happens locally after transcription; it adds no model call. Provider
 prompts supply command examples, but speech recognition can still omit or

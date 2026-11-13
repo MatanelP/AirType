@@ -20,6 +20,7 @@ AirType is a lightweight desktop app that transcribes your voice and inserts the
 
 - **Global hotkeys** — record from any application with a single keypress.
 - **English and Hebrew** — dedicated hotkeys and endpoints configured for each language.
+- **English dictation formatting** — opt-in spoken punctuation, automatic punctuation removal, and lowercase text. See [commands and examples](docs/english-dictation.md).
 - **Customizable Cloud Endpoints** — dynamically route English to OpenAI or a Custom RunPod endpoint, while strictly routing Hebrew to the `ivrit-ai` model.
 - **Floating indicator** — unobtrusive on-screen dot shows recording state.
 - **System tray** — runs in the background with near-zero resource usage.
@@ -33,8 +34,11 @@ AirType uses robust Cloud API endpoints to ensure the highest transcription qual
 
 | Language | Default Endpoint | Alternative Endpoints | Mode |
 |---|---|---|---|
-| **Hebrew** | **RunPod** (ivrit-ai/whisper-large-v3-turbo-ct2) | — | Batch (~1-3s after stop) |
-| **English** | **Same as Hebrew (RunPod)** | **OpenAI** (Whisper), **Custom RunPod** | Batch (~1-3s after stop) |
+| **Hebrew** | **RunPod** (configured ivrit-ai endpoint) | — | Batch, after recording stops |
+| **English** | **Same as Hebrew (RunPod)** | **OpenAI** (whisper-1), **Custom RunPod** | Batch, after recording stops |
+
+Latency depends on recording length, provider load, and RunPod worker cold starts.
+Audio goes to the selected provider; AirType does not download or run local models.
 
 ### Recording modes
 
@@ -139,6 +143,20 @@ npm run tauri dev
 
 Use the **Test** buttons in the main window to verify your API configuration.
 
+Under **Settings → English dictation**, enable any of the three formatting options
+independently. All default to off, including when loading older settings. See
+[English dictation formatting](docs/english-dictation.md) for commands and limitations.
+Endpoint tests apply formatting too; they do not test microphone capture or insertion.
+
+Hebrew filler filtering suppresses standalone `תודה` / `תודה רבה` only when the
+whole recording's RMS amplitude is below 0.02. Discarded results do not replace
+the last transcription, enter history, or insert text. This heuristic can also
+suppress quiet speech or a short phrase in a long recording.
+
+History stores up to 100 transcriptions locally, with copy/delete controls.
+Dismissing the last-transcription card does not clear history. Settings includes
+a Logs panel with refresh, copy, and export controls.
+
 ## Architecture
 
 ```mermaid
@@ -162,8 +180,9 @@ graph TB
     Hotkeys --> Audio
     Audio --> OpenAI
     Audio --> RunPod
-    OpenAI --> Inject
-    RunPod --> Inject
+    OpenAI --> Format[English formatting / Hebrew filler filtering]
+    RunPod --> Format
+    Format --> Inject
     Frontend <--> Backend
     Tray <--> Backend
 ```
@@ -221,6 +240,10 @@ keypair provided as repository secrets:
 
 To cut a release:
 
+For **1.5.0**, merge PRs **#2 and #4 before #3**. PR #3 contains the version bump
+and automatic release workflow; merging it first tags a release without the later
+PRs. Resolve review blockers and complete platform smoke tests before that merge.
+
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, and update `package-lock.json` and `src-tauri/Cargo.lock`.
 2. Merge the version bump and app changes into `main`. The release workflow validates the versions,
    creates the matching `v<version>` tag at that commit, and explicitly dispatches the signed build workflow at the tag.
@@ -238,6 +261,10 @@ signed updater package for each supported platform (Linux x86_64, macOS Apple Si
 and Windows x86_64). Missing packages, empty signatures, and duplicate targets fail
 the release job. Run `node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs`
 to test release validation and planning locally.
+
+These checks validate metadata and artifact selection; they do not run application
+tests or prove microphone, provider, insertion, and updater behavior. See the
+[release validation checklist](TODOs.md) and [agent guidance](AGENTS.md).
 
 > **Keep the private key safe.** If it's lost, you can't sign updates and the pubkey in `tauri.conf.json`
 > must be rotated (which breaks updates for already-installed clients until they reinstall).
