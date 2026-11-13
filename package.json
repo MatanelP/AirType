@@ -4,6 +4,8 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "setup:check": "bash scripts/setup.sh --check",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",

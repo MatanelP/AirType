@@ -1,205 +1,99 @@
-#!/bin/bash
-# AirType Setup Script
-# Helps install dependencies and download Whisper models
+#!/usr/bin/env bash
+# Prepare this checkout without changing system packages or downloading models.
+set -euo pipefail
 
-set -e
+usage() {
+    cat <<'HELP'
+Usage: bash scripts/setup.sh [--frontend-only] [--check]
 
-echo "🎤 AirType Setup Script"
-echo "========================"
-echo ""
+  --frontend-only  Prepare only the Svelte frontend (no Rust/backend required).
+  --check          Check prerequisites without installing dependencies.
+  --help           Show this help.
 
-# Detect OS
-OS="unknown"
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    OS="linux"
-elif [[ "$OSTYPE" == "darwin"* ]]; then
-    OS="macos"
-elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
-    OS="windows"
+Run from any directory. Installs locked npm dependencies with npm ci.
+System packages and toolchains must be installed separately.
+HELP
+}
+
+frontend_only=false
+check_only=false
+for argument in "$@"; do
+    case "$argument" in
+        --frontend-only) frontend_only=true ;;
+        --check) check_only=true ;;
+        --help|-h) usage; exit 0 ;;
+        *) echo "Unknown option: $argument" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$project_dir"
+failures=0
+fail() { echo "ERROR: $*" >&2; failures=$((failures + 1)); }
+
+if command -v node >/dev/null 2>&1; then
+    node_major="$(node -p 'process.versions.node.split(".")[0]')"
+    if (( node_major < 20 )); then
+        fail "Node.js 20 or newer is required; found $(node --version)."
+    else
+        echo "Node.js: $(node --version)"
+    fi
+else
+    fail "Node.js 20 or newer is required."
+fi
+command -v npm >/dev/null 2>&1 || fail "npm is required."
+[[ -f package-lock.json ]] || fail "package-lock.json is missing; restore it before setup."
+
+if ! "$frontend_only"; then
+    for backend_file in Cargo.toml tauri.conf.json; do
+        [[ -f "src-tauri/$backend_file" ]] || fail "Missing src-tauri/$backend_file. Restore the desktop backend, or use --frontend-only."
+    done
+    for tool in cargo rustc; do
+        command -v "$tool" >/dev/null 2>&1 || fail "$tool is required for desktop development."
+    done
+    case "$(uname -s)" in
+        Linux)
+            command -v cmake >/dev/null 2>&1 || fail "cmake is required for desktop development."
+            if command -v pkg-config >/dev/null 2>&1; then
+                for library in gtk+-3.0 webkit2gtk-4.1 alsa openssl dbus-1 x11 xi xtst; do
+                    pkg-config --exists "$library" || fail "Missing development library: $library (see README.md)."
+                done
+                if ! pkg-config --exists ayatana-appindicator3-0.1 && ! pkg-config --exists appindicator3-0.1; then
+                    fail "An Ayatana AppIndicator or AppIndicator development package is required."
+                fi
+            else
+                fail "pkg-config is required to check Linux development libraries (see README.md)."
+            fi
+            # Ubuntu's libxdo-dev does not ship a pkg-config file.
+            if ! command -v cc >/dev/null 2>&1; then
+                fail "A C compiler is required; install build-essential."
+            elif [[ ! -f "$(cc -print-file-name=libxdo.so)" ]]; then
+                fail "libxdo development library is required; install libxdo-dev."
+            fi
+            ;;
+        Darwin)
+            if ! command -v xcode-select >/dev/null 2>&1 || ! xcode-select -p >/dev/null 2>&1; then
+                fail "Xcode Command Line Tools are required; install them with xcode-select --install."
+            fi
+            ;;
+    esac
+    echo "Desktop builds also require platform libraries; see README.md."
 fi
 
-echo "Detected OS: $OS"
-echo ""
+if (( failures > 0 )); then
+    echo "Setup stopped: $failures prerequisite check(s) failed. No dependencies installed." >&2
+    exit 1
+fi
+if "$check_only"; then
+    echo "Prerequisite checks passed. No dependencies installed."
+    exit 0
+fi
 
-# Install system dependencies
-install_linux_deps() {
-    echo "📦 Installing Linux dependencies..."
-    if command -v apt &> /dev/null; then
-        sudo apt update
-        sudo apt install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libssl-dev \
-            pkg-config \
-            build-essential \
-            cmake \
-            curl \
-            libxdo-dev
-        echo "✅ Linux dependencies installed"
-    elif command -v dnf &> /dev/null; then
-        sudo dnf install -y \
-            gtk3-devel \
-            webkit2gtk4.1-devel \
-            libappindicator-gtk3-devel \
-            librsvg2-devel \
-            patchelf \
-            alsa-lib-devel \
-            openssl-devel \
-            pkgconf-pkg-config \
-            cmake \
-            curl
-        echo "✅ Linux dependencies installed (Fedora/RHEL)"
-    elif command -v pacman &> /dev/null; then
-        sudo pacman -Syu --noconfirm \
-            gtk3 \
-            webkit2gtk-4.1 \
-            libappindicator-gtk3 \
-            librsvg \
-            patchelf \
-            alsa-lib \
-            openssl \
-            pkgconf \
-            cmake \
-            curl
-        echo "✅ Linux dependencies installed (Arch)"
-    else
-        echo "⚠️  Could not detect package manager. Please install dependencies manually."
-        echo "See: https://tauri.app/start/prerequisites/#linux"
-    fi
-}
-
-install_macos_deps() {
-    echo "📦 Installing macOS dependencies..."
-    if ! command -v xcode-select &> /dev/null; then
-        xcode-select --install
-    else
-        echo "Xcode Command Line Tools already installed"
-    fi
-    
-    if command -v brew &> /dev/null; then
-        brew install cmake || true
-    else
-        echo "⚠️  Homebrew not found. Install from https://brew.sh/"
-    fi
-    echo "✅ macOS dependencies ready"
-}
-
-# Create config directories
-setup_directories() {
-    echo ""
-    echo "📁 Setting up directories..."
-    
-    CONFIG_DIR=""
-    if [[ "$OS" == "linux" ]]; then
-        CONFIG_DIR="$HOME/.config/airtype"
-    elif [[ "$OS" == "macos" ]]; then
-        CONFIG_DIR="$HOME/Library/Application Support/airtype"
-    elif [[ "$OS" == "windows" ]]; then
-        CONFIG_DIR="$APPDATA/airtype"
-    fi
-    
-    mkdir -p "$CONFIG_DIR/models"
-    echo "✅ Created $CONFIG_DIR/models"
-}
-
-# Download Whisper model
-download_model() {
-    echo ""
-    echo "🤖 Whisper Model Download"
-    echo "------------------------"
-    echo "Available models:"
-    echo "  1) tiny   (~75MB)  - Fastest, less accurate"
-    echo "  2) base   (~150MB) - Recommended balance"
-    echo "  3) small  (~500MB) - Better accuracy, slower"
-    echo "  4) Skip download"
-    echo ""
-    
-    read -p "Select model [2]: " choice
-    choice=${choice:-2}
-    
-    MODEL=""
-    case $choice in
-        1) MODEL="ggml-tiny.bin" ;;
-        2) MODEL="ggml-base.bin" ;;
-        3) MODEL="ggml-small.bin" ;;
-        4) echo "Skipping model download"; return ;;
-        *) echo "Invalid choice, using base"; MODEL="ggml-base.bin" ;;
-    esac
-    
-    CONFIG_DIR=""
-    if [[ "$OS" == "linux" ]]; then
-        CONFIG_DIR="$HOME/.config/airtype"
-    elif [[ "$OS" == "macos" ]]; then
-        CONFIG_DIR="$HOME/Library/Application Support/airtype"
-    elif [[ "$OS" == "windows" ]]; then
-        CONFIG_DIR="$APPDATA/airtype"
-    fi
-    
-    MODEL_PATH="$CONFIG_DIR/models/$MODEL"
-    
-    if [[ -f "$MODEL_PATH" ]]; then
-        echo "✅ Model already exists at $MODEL_PATH"
-        return
-    fi
-    
-    echo "⬇️  Downloading $MODEL..."
-    curl -L -# -o "$MODEL_PATH" \
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL"
-    
-    echo "✅ Model downloaded to $MODEL_PATH"
-}
-
-# Install Node.js dependencies
-install_npm_deps() {
-    echo ""
-    echo "📦 Installing Node.js dependencies..."
-    
-    if command -v npm &> /dev/null; then
-        npm install
-        echo "✅ Node.js dependencies installed"
-    else
-        echo "⚠️  npm not found. Please install Node.js first."
-        echo "See: https://nodejs.org/"
-    fi
-}
-
-# Main
-main() {
-    # Install system deps based on OS
-    if [[ "$OS" == "linux" ]]; then
-        read -p "Install Linux system dependencies? [Y/n]: " install_deps
-        install_deps=${install_deps:-Y}
-        if [[ "$install_deps" =~ ^[Yy] ]]; then
-            install_linux_deps
-        fi
-    elif [[ "$OS" == "macos" ]]; then
-        read -p "Install macOS dependencies? [Y/n]: " install_deps
-        install_deps=${install_deps:-Y}
-        if [[ "$install_deps" =~ ^[Yy] ]]; then
-            install_macos_deps
-        fi
-    fi
-    
-    setup_directories
-    download_model
-    install_npm_deps
-    
-    echo ""
-    echo "🎉 Setup complete!"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Run in development mode:  npm run tauri dev"
-    echo "  2. Build for production:     npm run tauri build"
-    echo ""
-    echo "Default hotkeys:"
-    echo "  Ctrl+Shift+Space - Hold to record"
-    echo "  Ctrl+Shift+R     - Toggle recording"
-    echo "  Ctrl+Shift+L     - Toggle language (EN/HE)"
-    echo ""
-}
-
-main "$@"
+npm ci --no-audit --no-fund
+printf '\nSetup complete.\n'
+if "$frontend_only"; then
+    echo "Run npm run dev for the frontend. Desktop commands require the Tauri backend."
+else
+    echo "Run npm run tauri dev for desktop development."
+fi
+echo "Configure cloud transcription credentials in the desktop app Settings. No local models are needed."

@@ -83,12 +83,16 @@ Then launch normally. You only need to do this once. The quick-install script do
 
 #### Prerequisites
 
+Use **Node.js 20 or newer**, npm, and (for desktop development) the stable
+Rust toolchain (`cargo` and `rustc`). Native Windows users can run `npm ci`
+directly; the setup helper requires Bash (for example, Git Bash).
+
 **Linux (Ubuntu/Debian)**
 ```bash
 sudo apt install -y \
     libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev \
     librsvg2-dev patchelf libasound2-dev libssl-dev libxdo-dev \
-    libdbus-1-dev pkg-config build-essential cmake
+    libdbus-1-dev libx11-dev libxi-dev libxtst-dev pkg-config build-essential cmake
 ```
 
 **macOS**
@@ -105,9 +109,30 @@ xcode-select --install
 ```bash
 git clone https://github.com/MatanelP/AirType.git
 cd AirType
-npm install
+npm run setup
 npm run tauri build
 ```
+
+The setup helper checks prerequisites and runs `npm ci` using the committed
+lockfile. It can be run from any directory with `bash /path/to/AirType/scripts/setup.sh`.
+It does not install system packages, change security settings, download models,
+or store API keys. Install the platform dependencies above separately.
+
+Check prerequisites without installing anything:
+```bash
+npm run setup:check
+```
+
+Desktop development requires the `src-tauri` directory, including `Cargo.toml`
+and `tauri.conf.json`. If your checkout does not contain it, restore the backend
+from a complete source checkout before running desktop commands. To work on the
+Svelte frontend independently:
+```bash
+npm run setup -- --frontend-only
+npm run dev
+```
+The browser frontend alone does not provide desktop recording, hotkeys, secure
+credential storage, or transcription commands.
 
 For development with hot reload:
 ```bash
