@@ -8,8 +8,18 @@
   transcription. English supports shared/custom RunPod and OpenAI whisper-1;
   Hebrew uses the default RunPod endpoint. There is no local-model setup step.
 - English formatting runs once before events, history, and insertion. Keep new
-  settings backward compatible with serde defaults; all three flags default off.
+  settings backward compatible with serde defaults; both flags default off.
   Preserve OS-keychain persistence, the updater endpoint, and signing public key.
+- Each spoken punctuation command writes its own mark. Preserve repeated and
+  mixed explicit marks; remove only adjacent model-added punctuation.
+- “Dot” aliases a period. Automatic-punctuation removal conservatively cleans
+  clear sentence starters while preserving opening/paragraph capitals, I and
+  contractions, acronyms, ambiguous names, and protected values. Keep the removed
+  lowercase preference benign when loading legacy settings; do not restore its UI.
+- Settings switches must not shrink. Keep detailed spoken-command help in an
+  accessible tooltip that works by pointer, keyboard, and click/touch.
+  Clipped help must support keyboard scrolling from the focused trigger while
+  preserving focus and outer-panel position, including the 400px minimum height.
 - Keep URL/email tokens opaque at spoken-command boundaries. Hebrew filler
   suppression requires nonempty finite digital silence in every capture window;
   retain any nonzero or uncertain signal rather than applying an RMS cutoff.
@@ -36,6 +46,11 @@ node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs
 git diff --check
 ```
 
+For Settings UI changes, start the local dev server and run
+`npm run test:settings-ui` with installed Chrome (configure `AIRTYPE_CHROME_PATH`
+when needed). Keep its browser sandbox enabled; this check covers frontend
+geometry and interactions, not native IPC or device behavior.
+
 Settings IPC must retain API-key fields needed by the UI. Disk persistence uses
 a redacted clone; test the actual disk-write boundary without accessing the host
 keyring. Live audio, insertion, platform permissions, and updates need separate
@@ -43,7 +58,8 @@ smoke tests; see TODOs.md.
 
 ## Releases and documentation
 
-For 1.5.0 merge #2 and #4 before #3. A version bump merged into `main` creates an
+Version 1.5.0 shipped #2, #4, and #3 in that order. Merge all intended changes
+before a version bump. A version bump merged into `main` creates an
 immutable version tag and dispatches Build & Release. Do not publish as a review
 test. Keep all five manifest/lockfile versions in agreement. README.md explains
 recovery at an existing tag; never move a published tag.

@@ -1,7 +1,8 @@
-# Release 1.5.0 validation
+# Release and live validation
 
-Implementation status is separate from platform validation. Describing these
-features does not mean that the three PRs have been merged or released.
+Version 1.5.0 is published, including PRs #2, #4, and #3. Release CI and public
+updater-manifest checks passed; live installed-client and device checks below
+remain separate. The 1.5.1 follow-up preserves every spoken punctuation command.
 
 ## Before merging the release PR
 
@@ -10,13 +11,20 @@ features does not mean that the three PRs have been merged or released.
 - Verify real recordings on shared RunPod, custom RunPod, and OpenAI, including
   formatting combinations, literal escapes, multiline insertion, Hebrew silence,
   quiet speech, and a short phrase surrounded by long pauses.
+- Verify repeated and mixed spoken punctuation, including “question mark” three
+  times producing `???` and “dot dot dot” producing `...`, with removal on/off.
+  Check conservative sentence-case cleanup, preserved `I`/contractions, names,
+  acronyms, decimals, abbreviations, and paragraph openers. Check the help tooltip
+  by pointer, keyboard, and touch, including clipped-help scrolling at 400px
+  height, and full switch width in narrow windows.
 - On Linux, macOS, and Windows verify hotkeys (hold/toggle and modifier-only),
   microphone permissions, text insertion, tray/window behavior, and saved settings.
 - Verify macOS launch-on-login and modifier-only hotkeys on the patched rdev build.
 - Verify an older installed client discovers and installs a signed update while
   retaining settings and history. This requires published artifacts; manifest
   tests alone do not establish it.
-- Merge #2 and #4 before #3; #3 starts the 1.5.0 release on merge to `main`.
+- Merge all intended changes before a version bump; merging that bump to `main`
+  starts the signed release path.
 
 ## Implemented features to retain
 

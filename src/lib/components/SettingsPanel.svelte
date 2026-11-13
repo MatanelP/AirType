@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getVersion } from '@tauri-apps/api/app';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   let { 
     isOpen = false, 
@@ -19,6 +19,57 @@
   let showApiKey = $state(false);
   let keyValidation = $state(null); // null | 'checking' | 'valid' | 'invalid'
   let appVersion = $state('');
+  let spokenHelpHovered = $state(false);
+  let spokenHelpFocused = $state(false);
+  let spokenHelpPinned = $state(false);
+  let spokenHelpDismissed = $state(false);
+  let spokenHelpVisible = $derived(!spokenHelpDismissed && (spokenHelpHovered || spokenHelpFocused || spokenHelpPinned));
+  let spokenHelpAnchor = $state(null);
+  let spokenHelpTooltip = $state(null);
+  let spokenHelpAbove = $state(false);
+  let spokenHelpMaxHeight = $state(200);
+
+  $effect(() => {
+    if (spokenHelpVisible) positionSpokenHelp();
+  });
+
+  async function positionSpokenHelp() {
+    if (!spokenHelpVisible) return;
+    await tick();
+    if (!spokenHelpAnchor || !spokenHelpTooltip) return;
+    const content = spokenHelpAnchor.closest('.settings-content');
+    if (!content) return;
+
+    const bounds = content.getBoundingClientRect();
+    const anchor = spokenHelpAnchor.getBoundingClientRect();
+    const top = Math.max(0, bounds.top) + 8;
+    const bottom = Math.min(window.innerHeight, bounds.bottom) - 8;
+    const above = Math.max(0, anchor.top - top);
+    const below = Math.max(0, bottom - anchor.bottom);
+    const desiredHeight = spokenHelpTooltip.scrollHeight + 2;
+
+    spokenHelpAbove = below < desiredHeight && above > below;
+    spokenHelpMaxHeight = spokenHelpAbove ? above : below;
+  }
+
+  function scrollSpokenHelp(event) {
+    if (!spokenHelpVisible || !spokenHelpTooltip || event.altKey || event.ctrlKey || event.metaKey
+        || spokenHelpTooltip.scrollHeight <= spokenHelpTooltip.clientHeight) return;
+    const page = spokenHelpTooltip.clientHeight * 0.8;
+    let next;
+    switch (event.key) {
+      case 'ArrowDown': next = spokenHelpTooltip.scrollTop + 32; break;
+      case 'ArrowUp': next = spokenHelpTooltip.scrollTop - 32; break;
+      case 'PageDown': next = spokenHelpTooltip.scrollTop + page; break;
+      case 'PageUp': next = spokenHelpTooltip.scrollTop - page; break;
+      case 'Home': next = 0; break;
+      case 'End': next = spokenHelpTooltip.scrollHeight; break;
+      default: return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    spokenHelpTooltip.scrollTop = Math.max(0, next);
+  }
 
   // Sync localSettings when settings prop changes
   $effect(() => {
@@ -28,6 +79,11 @@
   $effect(() => {
     if (isOpen) {
       refreshSettings();
+    } else {
+      spokenHelpHovered = false;
+      spokenHelpFocused = false;
+      spokenHelpPinned = false;
+      spokenHelpDismissed = false;
     }
   });
 
@@ -161,6 +217,13 @@
   }
 
   function handleKeydown(e) {
+    if (e.key === 'Escape' && spokenHelpVisible) {
+      spokenHelpPinned = false;
+      spokenHelpDismissed = true;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (!recordingHotkeyFor) return;
     
     e.preventDefault();
@@ -368,7 +431,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} onkeyup={handleKeyup} />
+<svelte:window onkeydown={handleKeydown} onkeyup={handleKeyup} onresize={positionSpokenHelp} />
 
 {#if isOpen}
   <div class="settings-backdrop" onclick={handleBackdropClick} role="presentation">
@@ -385,7 +448,7 @@
         </button>
       </div>
       
-      <div class="settings-content">
+      <div class="settings-content" onscroll={positionSpokenHelp}>
         <section class="settings-section">
           <h3>Hotkeys</h3>
           <p class="section-note">Press a key combination or single modifier key</p>
@@ -581,8 +644,46 @@
           <h3>English dictation</h3>
           <div class="setting-row">
             <div class="setting-info">
-              <span class="setting-label" id="spoken-punctuation-label">Spoken punctuation</span>
-              <span class="setting-desc">Say punctuation to override automatic marks at that position.</span>
+              <div
+                class="spoken-help"
+                bind:this={spokenHelpAnchor}
+                role="group"
+                aria-labelledby="spoken-punctuation-label"
+                onpointerenter={() => { spokenHelpHovered = true; spokenHelpDismissed = false; }}
+                onpointerleave={() => { spokenHelpHovered = false; }}
+                onfocusin={() => { spokenHelpFocused = true; spokenHelpDismissed = false; }}
+                onfocusout={() => { spokenHelpFocused = false; spokenHelpPinned = false; }}
+              >
+                <span class="setting-label" id="spoken-punctuation-label">Spoken punctuation</span>
+                <button
+                  type="button"
+                  class="spoken-help-button"
+                  aria-label="Help with spoken punctuation"
+                  aria-describedby="spoken-punctuation-help"
+                  aria-controls="spoken-punctuation-help"
+                  aria-expanded={spokenHelpVisible}
+                  aria-keyshortcuts="ArrowDown ArrowUp PageDown PageUp Home End Escape"
+                  onkeydown={scrollSpokenHelp}
+                  onclick={() => { spokenHelpPinned = !spokenHelpPinned; spokenHelpDismissed = !spokenHelpPinned; }}
+                >?</button>
+                <div
+                  class="spoken-help-tooltip"
+                  id="spoken-punctuation-help"
+                  role="tooltip"
+                  hidden={!spokenHelpVisible}
+                  bind:this={spokenHelpTooltip}
+                  style:top={spokenHelpAbove ? 'auto' : '100%'}
+                  style:bottom={spokenHelpAbove ? '100%' : 'auto'}
+                  style:max-height={`${spokenHelpMaxHeight}px`}
+                >
+                  English only. Say punctuation to override automatic marks at that position:
+                  “comma,” “dot,” “period” or “full stop,” “question mark,” “exclamation mark,”
+                  “colon,” “semicolon,” “new line,” or “new paragraph.”
+                  Each command adds a mark: “dot dot dot” writes “...”.
+                  Say “literal comma” to write the word “comma”; use “literal” before any command to write its words.
+                  If clipped, use arrow or PageUp/PageDown keys while this help button is focused.
+                </div>
+              </div>
             </div>
             <label class="toggle">
               <input
@@ -595,15 +696,10 @@
               <span class="toggle-slider"></span>
             </label>
           </div>
-          <p class="section-note" id="spoken-punctuation-help">
-            English only. Say “comma,” “period” or “full stop,” “question mark,”
-            “exclamation mark,” “colon,” “semicolon,” “new line,” or “new paragraph.”
-            Say “literal comma” to write the word “comma”; use “literal” before any command to write its words.
-          </p>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label" id="remove-punctuation-label">Remove automatic punctuation</span>
-              <span class="setting-desc" id="remove-punctuation-help">Keep spoken commands, contractions, decimals, and URLs. Capitalization stays the same.</span>
+              <span class="setting-desc" id="remove-punctuation-help">Remove automatic marks and clear sentence capitals; preserve “I,” names, spoken marks, and URLs.</span>
             </div>
             <label class="toggle">
               <input
@@ -612,22 +708,6 @@
                 aria-describedby="remove-punctuation-help"
                 checked={localSettings.english_remove_punctuation ?? false}
                 onchange={(e) => updateSetting('english_remove_punctuation', e.target.checked)}
-              />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label" id="lowercase-label">Lowercase text</span>
-              <span class="setting-desc" id="lowercase-help">Lowercase all English text, including names, acronyms, and URLs.</span>
-            </div>
-            <label class="toggle">
-              <input
-                type="checkbox"
-                aria-labelledby="lowercase-label"
-                aria-describedby="lowercase-help"
-                checked={localSettings.english_lowercase ?? false}
-                onchange={(e) => updateSetting('english_lowercase', e.target.checked)}
               />
               <span class="toggle-slider"></span>
             </label>
@@ -1047,14 +1127,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.75rem;
     padding: 0.75rem 0;
     border-bottom: 1px solid var(--color-border, #1a1a25);
   }
   
   .setting-info {
     display: flex;
+    flex: 1;
+    min-width: 0;
     flex-direction: column;
     gap: 0.125rem;
+    overflow-wrap: anywhere;
   }
   
   .setting-label {
@@ -1066,6 +1150,74 @@
   .setting-desc {
     font-size: 0.6875rem;
     color: var(--color-text-muted, #8888a0);
+  }
+
+  .spoken-help {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .spoken-help .setting-label {
+    min-width: 0;
+  }
+
+  .spoken-help-button {
+    flex: 0 0 1.5rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: 50%;
+    background: var(--color-surface-elevated, #1a1a25);
+    color: var(--color-text-muted, #8888a0);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .spoken-help-button:focus-visible {
+    outline: 2px solid var(--color-primary, #6366f1);
+    outline-offset: 2px;
+  }
+
+  .spoken-help-tooltip {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    width: min(20rem, calc(90vw - 3.5rem));
+    padding: 0.75rem;
+    border: 1px solid var(--color-border, #2a2a35);
+    border-radius: var(--radius-md, 8px);
+    background: var(--color-surface-elevated, #1a1a25);
+    color: var(--color-text, #f0f0f5);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    overflow-y: auto;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  }
+
+  @media (max-width: 380px) {
+    .setting-row:not(:has(> .toggle)) {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+    }
+
+    .setting-row:not(:has(> .toggle)) > :not(.setting-info) {
+      box-sizing: border-box;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .api-key-input .text-input {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+    }
   }
   
   .hotkey-btn {
@@ -1129,6 +1281,8 @@
   .toggle {
     position: relative;
     display: inline-block;
+    flex: 0 0 44px;
+    min-width: 44px;
     width: 44px;
     height: 24px;
   }

@@ -48,7 +48,6 @@
     hotkey_mode: 'hold',
     english_spoken_punctuation: false,
     english_remove_punctuation: false,
-    english_lowercase: false,
     start_minimized: false,
     start_on_login: false,
   });
