@@ -49,12 +49,12 @@ AirType uses robust Cloud API endpoints to ensure the highest transcription qual
 
 **Linux / macOS**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.sh | sh
 ```
 
 **Windows (PowerShell)**
 ```powershell
-irm https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.ps1 | iex
 ```
 
 The script auto-detects your OS and architecture, downloads the correct release asset, installs it (using `apt`/`dnf` on Linux, `/Applications` on macOS, MSI on Windows), and on macOS strips the quarantine attribute so the ad-hoc signed bundle launches without Gatekeeper blocking it.

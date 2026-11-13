@@ -1,7 +1,7 @@
 # AirType installer — Windows
 #
 # Usage (PowerShell):
-#   irm https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.ps1 | iex
 #
 # Env overrides:
 #   $env:AIRTYPE_VERSION   Tag to install (default: latest release)

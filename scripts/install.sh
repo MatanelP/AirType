@@ -2,7 +2,7 @@
 # AirType installer — Linux & macOS
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/master/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.sh | sh
 #
 # Env overrides:
 #   AIRTYPE_VERSION              Tag to install (default: latest release)
