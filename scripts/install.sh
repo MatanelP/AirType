@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/MatanelP/AirType/main/scripts/install.sh | sh
 #
 # Env overrides:
-#   AIRTYPE_VERSION              Tag to install (default: latest release)
+#   AIRTYPE_VERSION              Exact tag (default: newest compatible stable release)
 #   AIRTYPE_REPO                 owner/name (default: MatanelP/AirType)
 #   AIRTYPE_RESET_PERMISSIONS=1  macOS only — reset TCC grants for AirType
 #                                so the OS re-prompts for mic/apple-events
@@ -26,6 +26,7 @@ need() {
 
 need curl
 need uname
+need awk
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -36,14 +37,168 @@ case "$OS" in
     *)      err "unsupported OS: $OS (this script handles Linux and macOS; for Windows use install.ps1)" ;;
 esac
 
-# Resolve latest version if not pinned
+# Choose the exact installer before resolving a release. A partial release may
+# have another platform ready while this package is still building.
+case "$PLATFORM/$ARCH" in
+    macos/arm64|macos/aarch64) ASSET_PREFIX=AirType_; ASSET_SUFFIX=_aarch64.dmg ;;
+    macos/x86_64) err "macOS x86_64 is not published. Use an Apple Silicon Mac or build from source." ;;
+    linux/x86_64|linux/amd64)
+        if command -v apt-get >/dev/null 2>&1 || command -v dpkg >/dev/null 2>&1; then
+            ASSET_PREFIX=AirType_; ASSET_SUFFIX=_amd64.deb
+        elif command -v dnf >/dev/null 2>&1 || command -v rpm >/dev/null 2>&1; then
+            ASSET_PREFIX=AirType-; ASSET_SUFFIX=-1.x86_64.rpm
+        else
+            ASSET_PREFIX=AirType_; ASSET_SUFFIX=_amd64.AppImage
+        fi ;;
+    *) err "unsupported $PLATFORM arch: $ARCH" ;;
+esac
+
+release_api() {
+    curl -fsSL --connect-timeout 15 --max-time 60 --max-filesize 16777216 \
+        "https://api.github.com/repos/$REPO/$1"
+}
+
+# A bounded JSON reader, embedded so `curl | sh` needs no fetched code or extra
+# runtime. Read only release metadata and uploaded asset names; skip other JSON
+# structurally, including escaped strings. Never evaluate API data as shell code.
+inspect_releases() {
+    awk -v mode="$1" -v ceiling="${2:-}" -v prefix="$ASSET_PREFIX" -v suffix="$ASSET_SUFFIX" '
+    function bad() { print "invalid GitHub release metadata" > "/dev/stderr"; exit 2 }
+    function next_token(    c,e,h,n,i) {
+        while (substr(json,pos,1) ~ /[ \t\r\n]/ && pos <= length(json)) pos++
+        value=""; c=substr(json,pos++,1)
+        if (c=="") { token="eof"; return }
+        if (c=="{" || c=="}" || c=="[" || c=="]" || c=="," || c==":") { token=c; return }
+        if (c=="\"") {
+            token="string"
+            while (pos <= length(json)) {
+                c=substr(json,pos++,1)
+                if (c=="\"") return
+                if (c=="\\") {
+                    e=substr(json,pos++,1)
+                    if (e=="u") {
+                        h=substr(json,pos,4); if (length(h)!=4 || h ~ /[^0-9a-fA-F]/) bad()
+                        n=0
+                        for (i=1;i<=4;i++) n=n*16+index("0123456789abcdef",tolower(substr(h,i,1)))-1
+                        pos+=4; c=(n<128 ? sprintf("%c",n) : "?")
+                    } else if (e=="\"" || e=="\\" || e=="/") c=e
+                    else if (e ~ /^[bfnrt]$/) c="?"
+                    else bad()
+                } else if (c ~ /[[:cntrl:]]/) bad()
+                value=value c
+            }
+            bad()
+        }
+        pos--
+        if (!match(substr(json,pos),/^(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|true|false|null)/)) bad()
+        token="scalar"; value=substr(json,pos,RLENGTH); pos+=RLENGTH
+    }
+    function expect(want) { if (token!=want) bad() }
+    function skip_value(depth,    closing) {
+        if (depth>64) bad()
+        if (token=="{" || token=="[") {
+            closing=(token=="{" ? "}" : "]"); next_token()
+            if (token==closing) { next_token(); return }
+            while (1) {
+                if (closing=="}") { expect("string"); next_token(); expect(":"); next_token() }
+                skip_value(depth+1)
+                if (token==closing) { next_token(); return }
+                expect(","); next_token()
+            }
+        }
+        if (token!="string" && token!="scalar") bad()
+        next_token()
+    }
+    function read_assets(    key,name,state) {
+        expect("["); next_token()
+        if (token=="]") { next_token(); return }
+        while (1) {
+            expect("{"); next_token(); name=""; state=""
+            if (token!="}") while (1) {
+                expect("string"); key=value; next_token(); expect(":"); next_token()
+                if (key=="name" || key=="state") {
+                    expect("string")
+                    if (key=="name") name=value; else state=value
+                    next_token()
+                } else skip_value(1)
+                if (token=="}") break
+                expect(","); next_token()
+            }
+            if (state=="uploaded") names[name]=1
+            next_token()
+            if (token=="]") { next_token(); return }
+            expect(","); next_token()
+        }
+    }
+    function stable(tag) { return tag ~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ }
+    function compare(a,b,    x,y,i) {
+        split(substr(a,2),x,"."); split(substr(b,2),y,".")
+        for (i=1;i<=3;i++) {
+            if (length(x[i])!=length(y[i])) return length(x[i])>length(y[i]) ? 1 : -1
+            if ("x" x[i] != "x" y[i]) return "x" x[i] > "x" y[i] ? 1 : -1
+        }
+        return 0
+    }
+    function read_release(    key,tag,draft,pre,assets,found) {
+        for (key in names) delete names[key]
+        for (key in seen) delete seen[key]
+        expect("{"); next_token()
+        if (token!="}") while (1) {
+            expect("string"); key=value; next_token(); expect(":"); next_token()
+            if (key=="tag_name" || key=="draft" || key=="prerelease" || key=="assets") {
+                if (seen[key]++) bad()
+                if (key=="tag_name") { expect("string"); tag=value; next_token() }
+                else if (key=="assets") { assets=1; read_assets() }
+                else {
+                    expect("scalar"); if (value!="true" && value!="false") bad()
+                    if (key=="draft") draft=value; else pre=value
+                    next_token()
+                }
+            } else skip_value(1)
+            if (token=="}") break
+            expect(","); next_token()
+        }
+        next_token()
+        if (!assets || draft=="" || pre=="" || tag=="") bad()
+        found=((prefix substr(tag,2) suffix) in names)
+        if (mode=="latest") {
+            if (!stable(tag) || draft!="false" || pre!="false") bad()
+            selected=tag "|" (found ? "yes" : "no")
+        } else if (stable(tag) && draft=="false" && pre=="false" && found && compare(tag,ceiling)<=0) {
+            if (selected=="" || compare(tag,selected)>0) selected=tag
+        }
+    }
+    { json=json $0 "\n" }
+    END {
+        pos=1; next_token()
+        if (mode=="latest") read_release()
+        else {
+            expect("["); next_token()
+            if (token!="]") while (1) {
+                if (++count>100) bad()
+                read_release()
+                if (token=="]") break
+                expect(","); next_token()
+            }
+            expect("]"); next_token()
+        }
+        expect("eof")
+        print selected
+    }'
+}
+
+# Explicit pins remain exact and never fall back, including download failures.
 if [ -z "$VERSION" ]; then
-    info "Resolving latest release…"
-    VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-        | grep -oE '"tag_name":\s*"[^"]+"' \
-        | head -n1 \
-        | sed -E 's/.*"([^"]+)"/\1/')"
-    [ -n "$VERSION" ] || err "could not determine latest release tag"
+    info "Resolving latest compatible stable release…"
+    metadata="$(release_api releases/latest)" || err "could not query latest release"
+    latest="$(printf '%s\n' "$metadata" | inspect_releases latest)" || err "could not read latest release"
+    VERSION="${latest%|*}"
+    if [ "${latest#*|}" != yes ]; then
+        info "$VERSION does not yet contain this installer; checking up to 100 releases…"
+        metadata="$(release_api 'releases?per_page=100&page=1')" || err "could not query compatible releases"
+        VERSION="$(printf '%s\n' "$metadata" | inspect_releases fallback "$VERSION")" || err "could not read compatible releases"
+        [ -n "$VERSION" ] || err "no compatible stable installer found in the first 100 releases"
+    fi
 fi
 VERSION_NUM="${VERSION#v}"
 info "Installing AirType $VERSION on $PLATFORM/$ARCH"

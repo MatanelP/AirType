@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 20
       - name: Test release planning and validation
-        run: node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs
+        run: node --test scripts/release.test.mjs scripts/plan-main-release.test.mjs scripts/publish-platform-release.test.mjs scripts/installers.test.mjs
       - name: Validate manifests and plan immutable version tag
         id: plan
         run: node scripts/plan-main-release.mjs

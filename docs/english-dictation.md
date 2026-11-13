@@ -84,3 +84,9 @@ outer panel. Switches retain their full 44×24 size while labels wrap.
 `npm run test:settings-ui` checks these behaviors against a running local frontend
 at 350px/420px widths and 400px/800px heights using installed Chrome, without
 exercising native IPC.
+
+Formatting changes reach clients through signed versioned releases. Platforms
+publish progressively into the same release: an update becomes discoverable on
+your platform once its signed package is ready. Other platforms can arrive later;
+older clients may report a temporary update-check error while their target is
+absent. See [release behavior and recovery](../README.md#releasing-maintainers).
