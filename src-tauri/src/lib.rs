@@ -29,9 +29,10 @@ use hotkeys::{
 use injection::TextInjector;
 use settings::{EnglishEndpointType, IndicatorAlign, Settings, SettingsStore};
 use transcription::{
-    encode_wav, english_test_wav, hebrew_test_wav, is_hebrew_filler, transcribe_audio,
-    transcribe_audio_wav, transcribe_english, transcribe_hebrew_wav, validate_runpod,
+    encode_wav, english_test_wav, hebrew_test_wav, transcribe_audio, transcribe_audio_wav,
+    transcribe_english, transcribe_hebrew_wav, validate_runpod,
 };
+use transcription::is_hebrew_filler;
 use tauri_plugin_updater::UpdaterExt;
 
 use std::sync::atomic::{AtomicU64, Ordering};
